@@ -76,6 +76,11 @@ class CaulkScanner:
                 "Enable with --check-vulns."
             )
 
+        # 6. Aggregate per-file diagnostics recorded by ScanContext
+        for diag in context.diagnostics:
+            if diag not in errors:
+                errors.append(diag)
+
         # 6. Sanitize and redact all evidence
         sanitized_findings: list[Finding] = []
         for f in raw_findings:
@@ -141,6 +146,7 @@ class CaulkScanner:
             severity_counts=sev_counts,
             ecosystems_detected=sorted(inventory.ecosystems),
             checks_not_performed=checks_not_performed,
+            is_complete=not bool(errors),
         )
 
         return ScanResult(

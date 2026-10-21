@@ -1087,3 +1087,67 @@ def test_action_working_tree_scan_shallow_clone_succeeds(tmp_path: Path) -> None
 
     summary = summary_file.read_text(encoding="utf-8")
     assert "Scan Result: ✅ Passed" in summary
+
+
+def test_action_working_tree_scan_incomplete_yields_error(tmp_path: Path) -> None:
+    """Action execution maps incomplete working tree scan to scan-result=error when no breach."""
+    target_dir = tmp_path / "repo_incomplete"
+    target_dir.mkdir()
+    (target_dir / "broken.py").write_text("def f(:\n", encoding="utf-8")
+
+    summary_file = tmp_path / "step_summary_err.md"
+    output_file = tmp_path / "action_output_err.txt"
+
+    env = {
+        "INPUT_PATH": str(target_dir),
+        "INPUT_SEVERITY_THRESHOLD": "HIGH",
+        "INPUT_CHECK_VULNS": "false",
+        "INPUT_SCAN_HISTORY": "false",
+        "GITHUB_STEP_SUMMARY": str(summary_file),
+        "GITHUB_OUTPUT": str(output_file),
+        "RUNNER_TEMP": str(tmp_path),
+    }
+
+    ret = run_action(environ=env)
+    assert ret == EXIT_EXECUTION_ERROR
+
+    outputs = output_file.read_text(encoding="utf-8")
+    assert "scan-result=error" in outputs
+
+    summary = summary_file.read_text(encoding="utf-8")
+    assert "Scan Result: ⚠️ Incomplete Inspection" in summary
+    assert "AST parsing failed for broken.py" in summary
+
+
+def test_action_working_tree_scan_incomplete_with_breach_yields_failed(tmp_path: Path) -> None:
+    """Action execution maps incomplete working tree scan with breach to scan-result=failed."""
+    target_dir = tmp_path / "repo_incomplete_breach"
+    target_dir.mkdir()
+    (target_dir / "broken.py").write_text("def f(:\n", encoding="utf-8")
+    (target_dir / "vuln.py").write_text(
+        "def h(request): cursor.execute(f'SELECT * FROM u WHERE id = {request.args[\"id\"]}')\n",
+        encoding="utf-8",
+    )
+
+    summary_file = tmp_path / "step_summary_breach.md"
+    output_file = tmp_path / "action_output_breach.txt"
+
+    env = {
+        "INPUT_PATH": str(target_dir),
+        "INPUT_SEVERITY_THRESHOLD": "HIGH",
+        "INPUT_CHECK_VULNS": "false",
+        "INPUT_SCAN_HISTORY": "false",
+        "GITHUB_STEP_SUMMARY": str(summary_file),
+        "GITHUB_OUTPUT": str(output_file),
+        "RUNNER_TEMP": str(tmp_path),
+    }
+
+    ret = run_action(environ=env)
+    assert ret == EXIT_FINDINGS_BREACH_THRESHOLD
+
+    outputs = output_file.read_text(encoding="utf-8")
+    assert "scan-result=failed" in outputs
+
+    summary = summary_file.read_text(encoding="utf-8")
+    assert "Scan Result: ❌ Failed" in summary
+    assert "The scan was also **incomplete** due to coverage gaps or errors." in summary

@@ -152,3 +152,86 @@ def test_terminal_report_historical():
     assert "Author: Jane Doe <jane@example.com>" in text
     assert "Date:   2026-10-21T10:00:00Z" in text
     assert "Subject: Add old auth config" in text
+
+
+def test_terminal_report_incomplete_with_findings(sample_finding: Finding):
+    """Terminal renderer displays Scan Incomplete panel even when findings exist."""
+    output = StringIO()
+    test_console = Console(file=output, color_system=None, width=120)
+
+    summary = ScanSummary(
+        files_scanned=10,
+        files_skipped=2,
+        total_findings=1,
+        severity_counts={Severity.CRITICAL.value: 1},
+        is_complete=False,
+    )
+    result = ScanResult(
+        caulk_version="0.2.0",
+        target_path="/test/app",
+        findings=[sample_finding],
+        summary=summary,
+        errors=["AST parsing failed for app/bad.py: syntax error on line 5"],
+    )
+
+    render_terminal_report(result, console=test_console)
+    text = output.getvalue()
+
+    assert "Scan Incomplete" in text
+    assert "The scan was INCOMPLETE" in text
+    assert "Findings (1):" in text
+    assert "CRITICAL" in text
+    assert "Scan Warnings / Non-fatal Errors:" in text
+    assert "AST parsing failed for app/bad.py: syntax error on line 5" in text
+
+
+def test_terminal_report_incomplete_without_findings():
+    """Terminal renderer displays Scan Incomplete and suppresses Scan Clean when scan is incomplete."""
+    output = StringIO()
+    test_console = Console(file=output, color_system=None, width=120)
+
+    summary = ScanSummary(
+        files_scanned=5,
+        files_skipped=1,
+        total_findings=0,
+        is_complete=False,
+    )
+    result = ScanResult(
+        caulk_version="0.2.0",
+        target_path="/test/clean",
+        findings=[],
+        summary=summary,
+        errors=["AST parsing failed for broken.py: RecursionError"],
+    )
+
+    render_terminal_report(result, console=test_console)
+    text = output.getvalue()
+
+    assert "Scan Incomplete" in text
+    assert "Scan Clean" not in text
+    assert "cannot" in text and "clean" in text
+
+
+def test_step_summary_incomplete_with_breach(sample_finding: Finding):
+    """Step summary includes incomplete warning notice when findings also breach threshold."""
+    from caulk.reporting.summary import generate_step_summary
+
+    report_data = {
+        "caulk_version": "0.2.0",
+        "target_path": "/test/app",
+        "findings": [sample_finding.to_dict()],
+        "summary": {
+            "files_scanned": 5,
+            "files_skipped": 0,
+            "total_findings": 1,
+            "duration_seconds": 0.5,
+            "severity_counts": {"CRITICAL": 1, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0},
+            "is_complete": False,
+        },
+        "errors": ["AST parsing failed for bad.py: syntax error on line 2"],
+    }
+
+    md = generate_step_summary(report_data, threshold=Severity.HIGH)
+    assert "Scan Result: ❌ Failed (Threshold: HIGH)" in md
+    assert "The scan was also **incomplete** due to coverage gaps or errors." in md
+    assert "AST parsing failed for bad.py: syntax error on line 2" in md

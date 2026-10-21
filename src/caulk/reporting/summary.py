@@ -220,6 +220,14 @@ def generate_step_summary(
                 "",
             ]
         )
+        if not is_complete:
+            lines.extend(
+                [
+                    "> [!WARNING]",
+                    "> The scan was also **incomplete** due to coverage gaps or errors. Additional findings may exist.",
+                    "",
+                ]
+            )
     elif not is_complete:
         lines.extend(
             [

@@ -67,6 +67,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Multiline Evidence Formatting:** Replaced partial first-line excerpts with AST unparsed, whitespace-normalized snippets bounded to 120 characters with secret redaction.
   - **Case-Insensitive CLI Rule Disabling:** Normalized `--disable` arguments to uppercase so `--disable sast001` cleanly disables `SAST001`.
   - **Recursion Safety:** Safely handled `RecursionError` in `ScanContext.get_ast()` and `PythonASTSecurityAnalyzer.analyze()` on pathologically nested expressions without crashing scans.
+- **Python SAST Incomplete Analysis Tracking & Fail-Safe Semantics:**
+  - Replaced silent skipping of unparseable or deep Python ASTs with bounded per-file diagnostic tracking in `ScanContext` and `ScanResult.errors`.
+  - Discloses coverage gaps when AST parsing fails (`RecursionError`, `SyntaxError`, `ValueError`, `TypeError`) or SAST traversal encounters `RecursionError`, without leaking source contents or embedded credentials.
+  - Scan completeness enforcement: sets `ScanSummary.is_complete = False` when any eligible Python file cannot be fully analyzed, while preserving findings from all successfully inspected files.
+  - Fail-safe CLI exit semantics: incomplete scans without threshold-breaching findings now exit with code `3` (`EXIT_EXECUTION_ERROR`); scans with threshold-breaching findings preserve exit code `1`; only fully completed scans with zero threshold breaches return `0`.
+  - Terminal reporting transparency: displays an unmistakable `Scan Incomplete` banner even when findings are present, and never displays `Scan Clean` on incomplete scans.
+  - GitHub Action integration: maps incomplete scans to `scan-result=error` when findings do not breach the configured severity threshold.
+
 
 ---
 

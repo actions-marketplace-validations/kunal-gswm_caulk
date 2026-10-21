@@ -68,7 +68,8 @@ Caulk implements deterministic AST-based static analysis with intraprocedural ta
 #### Explicit Analysis Limitations
 - **Intraprocedural Scope:** Analysis operates intraprocedurally within individual files and function scopes. Taint across complex inter-module call graphs, dynamically dispatched methods, or class inheritance hierarchies is not tracked.
 - **Dynamic Reflection:** Taint originating from or passed through `getattr()`, `setattr()`, `eval()`, `exec()`, or custom C-extension functions is outside the scope of AST static inspection.
-- **Recursion Safety:** Pathological AST nesting depth exceeding Python runtime limits is safely caught and bounded without crashing scans of other files.
+- **Analysis Failures & Coverage Gap Disclosure:** If an eligible Python file cannot be parsed or analyzed due to `RecursionError`, `SyntaxError`, `ValueError`, or `TypeError`, Caulk safely isolates the failure, records structured per-file diagnostics identifying the affected file without leaking source code, preserves valid findings from all successfully analyzed files, and sets `is_complete=False` (failing closed with exit code 3 if no threshold breach is present). An uninspected file is never misrepresented as clean.
+
 
 ---
 

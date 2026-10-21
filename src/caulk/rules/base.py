@@ -27,6 +27,12 @@ class ScanContext:
     _line_cache: dict[Path, list[str]] = field(default_factory=dict)
     _ast_cache: dict[Path, ast.AST | None] = field(default_factory=dict)
     _sast_cache: dict[Path, tuple[list[Finding], list[Finding]]] = field(default_factory=dict)
+    diagnostics: list[str] = field(default_factory=list)
+
+    def record_diagnostic(self, message: str) -> None:
+        """Record an analysis failure or coverage gap without duplicates."""
+        if message not in self.diagnostics:
+            self.diagnostics.append(message)
 
     def read_text(self, file: DiscoveredFile) -> str:
         """Safely read text content of a discovered file with caching."""
@@ -57,11 +63,24 @@ class ScanContext:
         if file.path in self._ast_cache:
             return self._ast_cache[file.path]
 
+        if not file.rel_path.endswith(".py"):
+            self._ast_cache[file.path] = None
+            return None
+
         text = self.read_text(file)
+        tree: ast.AST | None = None
         try:
             tree = ast.parse(text, filename=str(file.path))
-        except (SyntaxError, ValueError, TypeError, RecursionError):
-            tree = None
+        except RecursionError:
+            self.record_diagnostic(
+                f"AST parsing failed for {file.rel_path}: maximum recursion depth exceeded (RecursionError)"
+            )
+        except SyntaxError as err:
+            self.record_diagnostic(
+                f"AST parsing failed for {file.rel_path}: syntax error on line {err.lineno or 0}"
+            )
+        except (ValueError, TypeError) as err:
+            self.record_diagnostic(f"AST parsing failed for {file.rel_path}: {type(err).__name__}")
 
         self._ast_cache[file.path] = tree
         return tree

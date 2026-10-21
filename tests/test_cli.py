@@ -179,3 +179,40 @@ def test_executable_invocation(tmp_path: Path):
     )
     assert res_scan.returncode == 0
     assert "Scan Clean" in res_scan.stdout
+
+
+def test_cli_scan_incomplete_without_breach_exits_3(cli_runner: CliRunner, tmp_path: Path):
+    """An incomplete scan with no findings breaching threshold must exit code 3."""
+    from caulk.cli import EXIT_EXECUTION_ERROR
+
+    (tmp_path / "broken.py").write_text("def bad(:\n", encoding="utf-8")
+    result = cli_runner.invoke(app, ["scan", str(tmp_path)])
+    assert result.exit_code == EXIT_EXECUTION_ERROR
+    assert "Scan Incomplete" in result.output
+    assert "Scan Clean" not in result.output
+
+
+def test_cli_scan_incomplete_with_breach_exits_1(cli_runner: CliRunner, tmp_path: Path):
+    """An incomplete scan with findings breaching threshold preserves exit code 1."""
+    (tmp_path / "broken.py").write_text("def bad(:\n", encoding="utf-8")
+    (tmp_path / "vuln.py").write_text(
+        "def h(request): cursor.execute(f'SELECT * FROM u WHERE id = {request.args[\"id\"]}')\n",
+        encoding="utf-8",
+    )
+    result = cli_runner.invoke(app, ["scan", str(tmp_path), "--severity-threshold", "HIGH"])
+    assert result.exit_code == EXIT_FINDINGS_BREACH_THRESHOLD
+    assert "Scan Incomplete" in result.output
+    assert "Findings (" in result.output
+
+
+def test_cli_scan_incomplete_format_json(cli_runner: CliRunner, tmp_path: Path):
+    """JSON output of incomplete scan contains is_complete: false and diagnostics."""
+    from caulk.cli import EXIT_EXECUTION_ERROR
+
+    (tmp_path / "broken.py").write_text("def bad(:\n", encoding="utf-8")
+    result = cli_runner.invoke(app, ["scan", str(tmp_path), "--format", "json"])
+    assert result.exit_code == EXIT_EXECUTION_ERROR
+    parsed = json.loads(result.output)
+    assert parsed["summary"]["is_complete"] is False
+    assert len(parsed["errors"]) >= 1
+    assert "syntax error" in parsed["errors"][0]

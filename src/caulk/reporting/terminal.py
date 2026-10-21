@@ -87,9 +87,9 @@ def render_terminal_report(result: ScanResult, console: Console | None = None) -
         )
     con.print()
 
-    # Findings
-    if not result.findings:
-        if not result.summary.is_complete:
+    # Incompleteness warning panel
+    if not result.summary.is_complete:
+        if not result.findings:
             con.print(
                 Panel(
                     Text(
@@ -103,6 +103,23 @@ def render_terminal_report(result: ScanResult, console: Console | None = None) -
                 )
             )
         else:
+            con.print(
+                Panel(
+                    Text(
+                        "The scan was INCOMPLETE.\n\n"
+                        "Coverage gaps, skipped oversized objects, or execution errors prevented complete inspection. "
+                        "Additional vulnerabilities may exist in uninspected portions.",
+                        style="yellow",
+                    ),
+                    title="[bold yellow]Scan Incomplete[/bold yellow]",
+                    border_style="yellow",
+                )
+            )
+        con.print()
+
+    # Findings
+    if not result.findings:
+        if result.summary.is_complete:
             con.print(
                 Panel(
                     Text(

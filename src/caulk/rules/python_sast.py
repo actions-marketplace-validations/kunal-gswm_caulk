@@ -452,8 +452,9 @@ class PythonASTSecurityAnalyzer:
                     argv_names=argv_names,
                 )
         except RecursionError:
-            # Safely handle pathological AST nesting depth
-            pass
+            self.context.record_diagnostic(
+                f"SAST analysis traversal failed for {self.file.rel_path}: maximum recursion depth exceeded (RecursionError)"
+            )
 
         return self.sql_findings, self.shell_findings
 

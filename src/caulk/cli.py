@@ -248,6 +248,9 @@ def scan_command(
     if breach:
         raise typer.Exit(code=EXIT_FINDINGS_BREACH_THRESHOLD)
 
+    if not result.summary.is_complete or result.errors:
+        raise typer.Exit(code=EXIT_EXECUTION_ERROR)
+
     raise typer.Exit(code=EXIT_SUCCESS_CLEAN)
 
 

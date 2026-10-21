@@ -11,6 +11,7 @@ Validates:
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 
@@ -1162,3 +1163,186 @@ def test_cli_disable_case_insensitive_flag(cli_runner: CliRunner, tmp_path: Path
 
     result = cli_runner.invoke(app, ["scan", str(repo), "--disable", "sast001"])
     assert "SAST001" not in result.output
+
+
+# ==============================================================================
+# 13. SAST Coverage Gaps, Diagnostics, and Scan Completeness
+# ==============================================================================
+
+
+def test_ast_parse_recursion_error_records_diagnostic_and_marks_incomplete(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """AST parsing RecursionError is recorded in diagnostics and marks scan incomplete."""
+    from caulk.scanner import CaulkScanner
+
+    file_deep = tmp_path / "deep.py"
+    file_deep.write_text("x = 1\n", encoding="utf-8")
+
+    file_good = tmp_path / "good.py"
+    file_good.write_text(
+        "def handler(request):\n"
+        "    cursor.execute(f'SELECT * FROM users WHERE id = {request.args[\"id\"]}')\n",
+        encoding="utf-8",
+    )
+
+    orig_parse = ast.parse
+
+    def controlled_parse(source, *args, **kwargs):
+        filename = kwargs.get("filename") or (args[0] if len(args) > 0 else "")
+        if "deep.py" in str(filename):
+            raise RecursionError("maximum recursion depth exceeded during parsing")
+        return orig_parse(source, *args, **kwargs)
+
+    monkeypatch.setattr(ast, "parse", controlled_parse)
+
+    scanner = CaulkScanner(CaulkConfig())
+    result = scanner.scan(tmp_path)
+
+    assert result.summary.is_complete is False
+    assert len(result.errors) >= 1
+    assert any(
+        "AST parsing failed for deep.py: maximum recursion depth exceeded (RecursionError)" in e
+        for e in result.errors
+    )
+    # Source contents must not be exposed in diagnostics
+    assert all("x = 1" not in e for e in result.errors)
+    # Valid files must still be analyzed and their findings preserved
+    assert len(result.findings) == 1
+    assert result.findings[0].file_path == "good.py"
+    assert result.findings[0].rule_id == "SAST001"
+
+
+def test_ast_traversal_recursion_error_retains_partial_findings_and_marks_incomplete(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """AST traversal RecursionError retains findings already discovered and marks scan incomplete."""
+    from caulk.rules.python_sast import PythonASTSecurityAnalyzer
+    from caulk.scanner import CaulkScanner
+
+    file_two = tmp_path / "two_funcs.py"
+    file_two.write_text(
+        "def func_vuln(request):\n"
+        "    cursor.execute(f'SELECT * FROM users WHERE id = {request.args[\"id\"]}')\n"
+        "\n"
+        "def func_recurse(request):\n"
+        "    os.system(request.args['cmd'])\n",
+        encoding="utf-8",
+    )
+
+    orig_analyze_stmts = PythonASTSecurityAnalyzer._analyze_statements
+
+    def mock_analyze_statements(self, stmts, *args, **kwargs):
+        first_call = getattr(self, "_call_counter", 0)
+        self._call_counter = first_call + 1
+        if first_call == 0:
+            for s in stmts:
+                orig_analyze_stmts(self, [s], *args, **kwargs)
+                if isinstance(s, ast.FunctionDef) and s.name == "func_vuln":
+                    raise RecursionError("maximum recursion depth exceeded during traversal")
+        else:
+            orig_analyze_stmts(self, stmts, *args, **kwargs)
+
+    monkeypatch.setattr(PythonASTSecurityAnalyzer, "_analyze_statements", mock_analyze_statements)
+
+    scanner = CaulkScanner(CaulkConfig())
+    result = scanner.scan(tmp_path)
+
+    assert result.summary.is_complete is False
+    assert len(result.errors) >= 1
+    assert any(
+        "SAST analysis traversal failed for two_funcs.py: maximum recursion depth exceeded (RecursionError)"
+        in e
+        for e in result.errors
+    )
+    # Partial finding discovered before RecursionError must be retained
+    assert len(result.findings) == 1
+    assert result.findings[0].rule_id == "SAST001"
+    # Uninspected sink must not produce finding
+    assert not any(f.rule_id == "SAST002" for f in result.findings)
+
+
+def test_ast_parse_syntax_error_records_diagnostic_safely(tmp_path: Path):
+    """SyntaxError records line number and file path without leaking code lines."""
+    from caulk.scanner import CaulkScanner
+
+    bad_file = tmp_path / "syntax_error.py"
+    bad_file.write_text(
+        "def broken_fn(:\n    secret_value = 'SUPER_SECRET_12345'\n", encoding="utf-8"
+    )
+
+    scanner = CaulkScanner(CaulkConfig())
+    result = scanner.scan(tmp_path)
+
+    assert result.summary.is_complete is False
+    assert len(result.errors) >= 1
+    assert any(
+        "AST parsing failed for syntax_error.py: syntax error on line 1" in e for e in result.errors
+    )
+    # Diagnostic must not leak source line content or secret values
+    assert all("SUPER_SECRET_12345" not in e for e in result.errors)
+    assert all("broken_fn" not in e for e in result.errors)
+
+
+def test_ast_parse_value_or_type_error_records_diagnostic(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """ValueError during parsing records error class name safely."""
+    from caulk.scanner import CaulkScanner
+
+    bad_file = tmp_path / "bad_val.py"
+    bad_file.write_text("a = 1\n", encoding="utf-8")
+
+    orig_parse = ast.parse
+
+    def mock_parse(source, *args, **kwargs):
+        filename = kwargs.get("filename") or (args[0] if len(args) > 0 else "")
+        if "bad_val.py" in str(filename):
+            raise ValueError("null bytes in input")
+        return orig_parse(source, *args, **kwargs)
+
+    monkeypatch.setattr(ast, "parse", mock_parse)
+
+    scanner = CaulkScanner(CaulkConfig())
+    result = scanner.scan(tmp_path)
+
+    assert result.summary.is_complete is False
+    assert any("AST parsing failed for bad_val.py: ValueError" in e for e in result.errors)
+
+
+def test_ast_non_python_files_do_not_produce_sast_diagnostics(tmp_path: Path):
+    """Non-Python files do not trigger AST parsing or false analysis incomplete status."""
+    from caulk.scanner import CaulkScanner
+
+    (tmp_path / "config.json").write_text('{"name": "test"}', encoding="utf-8")
+    (tmp_path / "script.js").write_text("console.log('hello');", encoding="utf-8")
+    (tmp_path / "README.md").write_text("# Readme", encoding="utf-8")
+
+    scanner = CaulkScanner(CaulkConfig())
+    result = scanner.scan(tmp_path)
+
+    assert result.summary.is_complete is True
+    assert result.errors == []
+
+
+def test_repeated_scans_do_not_leak_diagnostics(tmp_path: Path):
+    """Separate scan invocations maintain isolated diagnostic state."""
+    from caulk.scanner import CaulkScanner
+
+    dir1 = tmp_path / "scan1"
+    dir1.mkdir()
+    (dir1 / "bad.py").write_text("def f(:", encoding="utf-8")
+
+    dir2 = tmp_path / "scan2"
+    dir2.mkdir()
+    (dir2 / "clean.py").write_text("x = 1\n", encoding="utf-8")
+
+    scanner = CaulkScanner(CaulkConfig())
+
+    res1 = scanner.scan(dir1)
+    assert res1.summary.is_complete is False
+    assert len(res1.errors) == 1
+
+    res2 = scanner.scan(dir2)
+    assert res2.summary.is_complete is True
+    assert res2.errors == []
