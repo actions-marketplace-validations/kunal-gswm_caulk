@@ -986,3 +986,104 @@ def test_action_history_scan_clean(tmp_path: Path) -> None:
 
     summary = summary_file.read_text(encoding="utf-8")
     assert "Scan Result: ✅ Passed" in summary
+
+
+def test_action_history_scan_shallow_clone_fails_closed(tmp_path: Path) -> None:
+    """Verify action fails closed (exit code 3) on shallow clone when scan-history is true."""
+    origin = tmp_path / "origin_action"
+    origin.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=origin, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.name", "Action Tester"], cwd=origin, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "tester@example.com"],
+        cwd=origin,
+        check=True,
+        capture_output=True,
+    )
+    (origin / "clean.py").write_text("print('clean')\n")
+    subprocess.run(["git", "add", "clean.py"], cwd=origin, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=origin, check=True, capture_output=True)
+
+    shallow_repo = tmp_path / "shallow_action"
+    subprocess.run(
+        ["git", "clone", "--depth", "1", origin.resolve().as_uri(), str(shallow_repo)],
+        check=True,
+        capture_output=True,
+    )
+
+    summary_file = tmp_path / "step_summary_shallow.md"
+    output_file = tmp_path / "action_output_shallow.txt"
+
+    env = {
+        "INPUT_PATH": str(shallow_repo),
+        "INPUT_SEVERITY_THRESHOLD": "HIGH",
+        "INPUT_CHECK_VULNS": "false",
+        "INPUT_SCAN_HISTORY": "true",
+        "GITHUB_STEP_SUMMARY": str(summary_file),
+        "GITHUB_OUTPUT": str(output_file),
+        "RUNNER_TEMP": str(tmp_path),
+    }
+
+    ret = run_action(environ=env)
+    assert ret == EXIT_EXECUTION_ERROR
+
+    outputs = output_file.read_text(encoding="utf-8")
+    assert "scan-result=error" in outputs
+    assert "scan-result=passed" not in outputs
+
+    summary = summary_file.read_text(encoding="utf-8")
+    assert "Scan Result: ✅ Passed" not in summary
+    assert "Scan Result: ⚠️ Incomplete Inspection" in summary
+    assert "Target repository is a shallow clone" in summary
+    assert "fetch-depth: 0" in summary
+
+
+def test_action_working_tree_scan_shallow_clone_succeeds(tmp_path: Path) -> None:
+    """Verify working tree scan (scan-history=false) succeeds on shallow clones without restriction."""
+    origin = tmp_path / "origin_wt"
+    origin.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=origin, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.name", "Action Tester"], cwd=origin, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "tester@example.com"],
+        cwd=origin,
+        check=True,
+        capture_output=True,
+    )
+    (origin / "clean.py").write_text("print('clean code')\n")
+    subprocess.run(["git", "add", "clean.py"], cwd=origin, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=origin, check=True, capture_output=True)
+
+    shallow_repo = tmp_path / "shallow_wt"
+    subprocess.run(
+        ["git", "clone", "--depth", "1", origin.resolve().as_uri(), str(shallow_repo)],
+        check=True,
+        capture_output=True,
+    )
+
+    summary_file = tmp_path / "step_summary_wt.md"
+    output_file = tmp_path / "action_output_wt.txt"
+
+    env = {
+        "INPUT_PATH": str(shallow_repo),
+        "INPUT_SEVERITY_THRESHOLD": "HIGH",
+        "INPUT_CHECK_VULNS": "false",
+        "INPUT_SCAN_HISTORY": "false",
+        "GITHUB_STEP_SUMMARY": str(summary_file),
+        "GITHUB_OUTPUT": str(output_file),
+        "RUNNER_TEMP": str(tmp_path),
+    }
+
+    ret = run_action(environ=env)
+    assert ret == EXIT_SUCCESS_CLEAN
+
+    outputs = output_file.read_text(encoding="utf-8")
+    assert "scan-result=passed" in outputs
+    assert "findings-count=0" in outputs
+
+    summary = summary_file.read_text(encoding="utf-8")
+    assert "Scan Result: ✅ Passed" in summary

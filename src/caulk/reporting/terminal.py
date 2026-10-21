@@ -61,6 +61,8 @@ def render_terminal_report(result: ScanResult, console: Console | None = None) -
         if result.summary.scan_scope:
             if result.summary.scan_scope.get("full_history") is False:
                 scope_parts = []
+                if result.summary.scan_scope.get("is_shallow"):
+                    scope_parts.append("shallow clone")
                 if result.summary.scan_scope.get("max_depth"):
                     scope_parts.append(f"max-depth: {result.summary.scan_scope['max_depth']}")
                 if result.summary.scan_scope.get("since"):

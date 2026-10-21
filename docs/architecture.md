@@ -178,6 +178,11 @@ flowchart TD
    - Any coverage gap, missing object, corrupt pack, skipped oversized blob, or traversal interruption sets `is_complete = False` and triggers non-zero exit code `3` (`EXIT_EXECUTION_ERROR`), preventing incomplete scans from falsely appearing clean.
    - Background daemon threads drain `stderr` concurrently, preventing OS pipe buffer deadlocks.
    - User-supplied refs are strictly validated against option injection (`--ref` cannot begin with `-`).
+7. **Shallow Clone Detection & Coverage Protection:**
+   - Before scanning historical refs, Caulk validates repository completeness via `is_shallow_repo()` executing `git rev-parse --is-shallow-repository`.
+   - If the repository is a shallow clone (`true`), Caulk refuses to attest that the scan was a complete historical evaluation: `is_complete` is set to `False`, the scope is flagged as `is_shallow: True` (`Partial history (shallow clone)`), and an actionable error directing users to `fetch-depth: 0` is recorded.
+   - If zero findings are discovered in available shallow commits, Caulk exits with `3` (`EXIT_EXECUTION_ERROR`), preventing truncated history from producing false clean results in CI.
+   - Any valid findings discovered in the available commits are preserved and reported, returning exit code `1` (`EXIT_FINDINGS_BREACH_THRESHOLD`).
 
 ---
 

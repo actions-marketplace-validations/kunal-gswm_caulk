@@ -33,8 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **GitHub Action History Scanning Support:**
   - Added optional `scan-history: 'false'` action input allowing CI workflows to run historical secret scanning instead of working-tree inspection.
   - Extended GitHub Step Summary reporting with commit SHA coordinates and history scan metrics.
+- **Shallow Clone Detection & Coverage Protection:**
+  - Reliable shallow clone detection via `git rev-parse --is-shallow-repository` in `is_shallow_repo()`.
+  - Fail-safe history completeness: shallow clones refuse clean exit code `0`, marking `is_complete = False` and exiting with code `3` (`EXIT_EXECUTION_ERROR`) unless actionable findings are discovered (exit code `1`).
+  - Actionable diagnostic reporting directing developers and CI workflows to configure `fetch-depth: 0` with `actions/checkout`.
+  - Dynamic scope and limitation disclosure (`Partial history (shallow clone)`) across terminal reports, JSON reports, and GitHub Step Summaries.
 - **Test Suite Expansion:**
-  - Added 19 comprehensive unit and integration tests (`tests/test_history.py`) covering all Git topologies (initial commit, deleted secrets, replaced secrets, merge commits, tags, orphan branches, duplicate blobs, oversized blobs, corrupt objects, and secret redaction).
+  - Added 25 comprehensive unit and integration tests (`tests/test_history.py` and `tests/test_action.py`) covering all Git topologies (initial commit, deleted secrets, replaced secrets, merge commits, tags, orphan branches, duplicate blobs, oversized blobs, corrupt objects, shallow clone rejection, and secret redaction).
 
 ---
 

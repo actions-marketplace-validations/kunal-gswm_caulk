@@ -128,6 +128,45 @@ def is_git_repo(path: Path | str) -> bool:
         return False
 
 
+def is_shallow_repo(path: Path | str) -> bool:
+    """Check if the given Git repository is a shallow clone using git rev-parse --is-shallow-repository.
+
+    Returns True if the repository is a shallow clone.
+    Returns False if the repository is a complete, full-history clone.
+    Raises GitError if Git is missing, the repository is invalid, or the command fails.
+    """
+    if not is_git_installed():
+        raise GitError("Git executable is not installed or not found in PATH.")
+    target = Path(path).resolve()
+    if not is_git_repo(target):
+        raise GitCommandError(f"Target path is not a valid Git repository: {target}")
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(target), "rev-parse", "--is-shallow-repository"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception as err:
+        raise GitCommandError(f"Failed to check if repository is shallow: {err}") from err
+
+    if res.returncode != 0:
+        err_msg = res.stderr.strip()
+        raise GitCommandError(
+            f"git rev-parse --is-shallow-repository failed with exit code {res.returncode}: {err_msg}",
+            returncode=res.returncode,
+            stderr=err_msg,
+        )
+
+    out = res.stdout.strip().lower()
+    if out == "true":
+        return True
+    if out == "false":
+        return False
+
+    raise GitCommandError(f"Unexpected output from git rev-parse --is-shallow-repository: '{out}'")
+
+
 def get_local_refs(path: Path | str) -> list[str]:
     """Retrieve all local reachable refs (branches, tags, HEAD).
 

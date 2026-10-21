@@ -23,6 +23,7 @@ from caulk.history.git import (
     GitError,
     get_local_refs,
     is_git_repo,
+    is_shallow_repo,
     parse_blob_size,
     stream_git_log,
 )
@@ -268,6 +269,29 @@ class GitHistoryScanner:
                 errors=[f"Target path is not a valid Git repository: {self.repo_path}"],
             )
 
+        is_shallow = False
+        try:
+            is_shallow = is_shallow_repo(self.repo_path)
+        except GitError as err:
+            return ScanResult(
+                caulk_version=__version__,
+                target_path=str(self.repo_path),
+                findings=[],
+                summary=ScanSummary(
+                    scan_mode="git_history",
+                    targets_scanned=1,
+                    is_complete=False,
+                ),
+                errors=[f"Failed to verify repository completeness: {err}"],
+            )
+
+        if is_shallow:
+            errors.append(
+                "Target repository is a shallow clone (git rev-parse --is-shallow-repository returned true). "
+                "Older commits may be absent from local history. Full history scanning requires a complete clone "
+                "(in GitHub Actions, configure 'actions/checkout' with 'fetch-depth: 0')."
+            )
+
         refs_scanned: list[str] = []
         try:
             refs_scanned = [self.ref] if self.ref else get_local_refs(self.repo_path)
@@ -372,9 +396,10 @@ class GitHistoryScanner:
             errors.append(f"Unexpected error during Git history scan: {err}")
             is_complete = False
 
-        # Any coverage gap, missing object, corrupt object, or read error marks scan incomplete
+        # Any shallow clone, coverage gap, missing object, corrupt object, or read error marks scan incomplete
         if (
-            self._blobs_skipped_oversized > 0
+            is_shallow
+            or self._blobs_skipped_oversized > 0
             or self._blobs_missing > 0
             or self._blobs_corrupt > 0
             or self._blobs_read_errors > 0
@@ -407,9 +432,12 @@ class GitHistoryScanner:
         for f in sorted_findings:
             sev_counts[f.severity.value] = sev_counts.get(f.severity.value, 0) + 1
 
-        is_full_history = self.max_depth is None and self.since is None and self.ref is None
+        is_full_history = (
+            not is_shallow and self.max_depth is None and self.since is None and self.ref is None
+        )
         scan_scope: dict[str, Any] = {
             "full_history": is_full_history,
+            "is_shallow": is_shallow,
             "max_depth": self.max_depth,
             "since": self.since,
             "ref": self.ref,
@@ -421,6 +449,11 @@ class GitHistoryScanner:
             "Unreachable Git objects and un-fetched remote refs were not inspected.",
         ]
 
+        if is_shallow:
+            checks_not_performed.append(
+                "Older historical commits were not inspected because the repository is a shallow clone "
+                "(in GitHub Actions, configure 'actions/checkout' with 'fetch-depth: 0')."
+            )
         if self.max_depth is not None:
             checks_not_performed.append(
                 f"History scan scope was limited to {self.max_depth} commit(s) via --max-depth; older history was not inspected."

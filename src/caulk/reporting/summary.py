@@ -192,7 +192,10 @@ def generate_step_summary(
                 f"**Skipped:** {files_skipped} blobs ({blobs_skipped_oversized} oversized, {blobs_skipped_binary} binary)"
             )
         if scan_scope and scan_scope.get("full_history") is False:
-            inspected_parts.append("**Scope:** Partial history")
+            if scan_scope.get("is_shallow"):
+                inspected_parts.append("**Scope:** Partial history (shallow clone)")
+            else:
+                inspected_parts.append("**Scope:** Partial history")
         else:
             inspected_parts.append("**Scope:** Full reachable history")
         inspected_str = " | ".join(inspected_parts)

@@ -122,6 +122,11 @@ caulk-security history scan . --format json --output history-report.json
 caulk-security history scan . --max-blob-size 500KB --exclude "tests/*"
 ```
 
+> [!IMPORTANT]
+> **Shallow Clone Protection:** Git history scanning requires a complete Git clone. If executed inside a shallow clone (e.g. created by `git clone --depth 1` or standard CI checkouts), Caulk detects the truncation using `git rev-parse --is-shallow-repository` and marks the scan incomplete (`is_complete = false`), failing closed with exit code 3 (`EXIT_EXECUTION_ERROR`) unless actionable findings are discovered (exit code 1). Older historical commits are never silently omitted from security evaluations. In CI, configure `actions/checkout` with `fetch-depth: 0`.
+>
+> **Unreachable Git Objects:** History scanning inspects all commits reachable from local refs (branches, tags, HEAD). Unreachable loose objects, unreferenced reflog entries, and remote branches that have not been fetched into local refs are not inspected.
+
 ### Machine-Readable JSON Output
 
 ```bash
@@ -327,6 +332,38 @@ jobs:
           python-version: "3.12"
 ```
 
+#### Full Git History Scanning Workflow (Requires `fetch-depth: 0`)
+
+To scan all commits across the repository's history rather than just the working tree, configure `actions/checkout` with `fetch-depth: 0` and set `scan-history: true`:
+
+```yaml
+name: Caulk Full History Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  caulk-history-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Full Git History
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # Required: Caulk rejects shallow clones to prevent false-clean scans
+          persist-credentials: false
+
+      - name: Run Caulk Git History Scan
+        uses: kunal-gswm/caulk@v0.2.0
+        with:
+          scan-history: true
+          severity-threshold: HIGH
+```
+
 ### Action Inputs
 
 | Input | Description | Required | Default | Allowed Values |
@@ -334,7 +371,7 @@ jobs:
 | `path` | Path to repository or subfolder to scan | No | `.` | Directory path relative to `GITHUB_WORKSPACE` |
 | `severity-threshold` | Minimum severity level to fail the job | No | `HIGH` | `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO` |
 | `check-vulns` | Enable outbound queries to OSV for package CVEs | No | `false` | `true`, `false` |
-| `scan-history` | Scan Git repository history for exposed secrets | No | `false` | `true`, `false` |
+| `scan-history` | Scan Git repository history for exposed secrets (requires full clone with `fetch-depth: 0`) | No | `false` | `true`, `false` |
 | `python-version` | Python runtime version for scanner environment | No | `3.12` | `3.11`, `3.12`, `3.13` |
 
 ### Action Outputs

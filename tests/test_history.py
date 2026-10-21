@@ -12,7 +12,9 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from caulk.cli import (
@@ -24,8 +26,11 @@ from caulk.cli import (
 )
 from caulk.history.git import (
     GitBlobReader,
+    GitCommandError,
+    GitError,
     get_local_refs,
     is_git_repo,
+    is_shallow_repo,
     parse_blob_size,
     validate_git_ref,
 )
@@ -55,6 +60,7 @@ def synthetic_private_key() -> str:
 
 def make_git_repo(path: Path) -> Path:
     """Initialize a clean Git repository for testing."""
+    path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
     subprocess.run(
         ["git", "config", "user.name", "Caulk Tester"], cwd=path, check=True, capture_output=True
@@ -831,3 +837,169 @@ def test_no_raw_credentials_in_diagnostics_or_reports(
     report_content = json_path.read_text(encoding="utf-8")
     assert raw_key not in report_content
     assert raw_tok not in report_content
+
+
+def test_is_shallow_repo_detection(tmp_path: Path) -> None:
+    """Verify is_shallow_repo reliably detects full vs shallow clones and handles errors."""
+    origin = make_git_repo(tmp_path / "origin")
+    (origin / "file.txt").write_text("Hello\n")
+    git_commit(origin, "Initial commit")
+
+    # 1. Full repository returns False
+    assert is_shallow_repo(origin) is False
+
+    # 2. Shallow repository returns True
+    shallow_dir = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "--depth", "1", origin.resolve().as_uri(), str(shallow_dir)],
+        check=True,
+        capture_output=True,
+    )
+    assert is_shallow_repo(shallow_dir) is True
+
+    # 3. Non-git directory raises GitCommandError
+    non_git = tmp_path / "non_git"
+    non_git.mkdir()
+    with pytest.raises(GitCommandError):
+        is_shallow_repo(non_git)
+
+    # 4. Missing Git executable raises GitError
+    with (
+        patch("caulk.history.git.is_git_installed", return_value=False),
+        pytest.raises(GitError, match="Git executable is not installed"),
+    ):
+        is_shallow_repo(origin)
+
+    # 5. Unexpected stdout output raises GitCommandError
+    mock_res = subprocess.CompletedProcess(
+        args=["git", "rev-parse", "--is-shallow-repository"],
+        returncode=0,
+        stdout="unknown_val\n",
+        stderr="",
+    )
+    with (
+        patch("subprocess.run", return_value=mock_res),
+        pytest.raises(GitCommandError, match="Unexpected output"),
+    ):
+        is_shallow_repo(origin)
+
+
+def test_shallow_clone_historical_secret_fails_closed(
+    tmp_path: Path, cli_runner: CliRunner
+) -> None:
+    """Verify shallow clone where secret is in older history fails closed (exit code 3) rather than reporting clean."""
+    origin = make_git_repo(tmp_path / "origin")
+
+    # Commit 1: Add a secret
+    (origin / "creds.py").write_text(f"AWS_KEY = '{synthetic_aws_key()}'\n")
+    git_commit(origin, "Commit with secret")
+
+    # Commit 2: Remove secret
+    (origin / "creds.py").unlink()
+    (origin / "clean.py").write_text("print('clean code')\n")
+    git_commit(origin, "Remove secret")
+
+    # 1. Full clone should detect the deleted secret and exit 1
+    full_dir = tmp_path / "full_clone"
+    subprocess.run(
+        ["git", "clone", origin.resolve().as_uri(), str(full_dir)],
+        check=True,
+        capture_output=True,
+    )
+    scanner_full = GitHistoryScanner(full_dir)
+    res_full = scanner_full.scan()
+    assert res_full.summary.is_complete is True
+    assert len(res_full.findings) == 1
+    assert res_full.findings[0].status == FindingStatus.HISTORICAL
+
+    res_cli_full = cli_runner.invoke(app, ["history", "scan", str(full_dir)])
+    assert res_cli_full.exit_code == EXIT_FINDINGS_BREACH_THRESHOLD
+
+    # 2. Shallow clone with depth 1 only receives Commit 2 (where secret is already deleted)
+    shallow_dir = tmp_path / "shallow_clone"
+    subprocess.run(
+        ["git", "clone", "--depth", "1", origin.resolve().as_uri(), str(shallow_dir)],
+        check=True,
+        capture_output=True,
+    )
+
+    scanner_shallow = GitHistoryScanner(shallow_dir)
+    res_shallow = scanner_shallow.scan()
+
+    # Secret is absent from shallow history, but scan must NOT be marked complete
+    assert len(res_shallow.findings) == 0
+    assert res_shallow.summary.is_complete is False
+    assert res_shallow.summary.scan_scope["is_shallow"] is True
+    assert res_shallow.summary.scan_scope["full_history"] is False
+    assert any("shallow clone" in err.lower() for err in res_shallow.errors)
+    assert any("fetch-depth: 0" in err for err in res_shallow.errors)
+    assert any("shallow clone" in chk.lower() for chk in res_shallow.summary.checks_not_performed)
+
+    # CLI on shallow repo must fail closed with exit code 3 (EXECUTION ERROR), NOT exit code 0
+    res_cli_shallow = cli_runner.invoke(app, ["history", "scan", str(shallow_dir)])
+    assert res_cli_shallow.exit_code == EXIT_EXECUTION_ERROR
+    assert "Scan Incomplete" in res_cli_shallow.output
+    assert "Scan Clean" not in res_cli_shallow.output
+    assert "shallow clone" in res_cli_shallow.output.lower()
+    assert "fetch-depth: 0" in res_cli_shallow.output
+
+
+def test_shallow_clone_with_secret_in_available_window(
+    tmp_path: Path, cli_runner: CliRunner
+) -> None:
+    """Verify secrets discovered in available commits of a shallow clone are preserved and reported."""
+    origin = make_git_repo(tmp_path / "origin")
+    (origin / "clean.py").write_text("print('clean')\n")
+    git_commit(origin, "Clean commit 1")
+
+    # Shallow clone
+    shallow_dir = tmp_path / "shallow_secret"
+    subprocess.run(
+        ["git", "clone", "--depth", "1", origin.resolve().as_uri(), str(shallow_dir)],
+        check=True,
+        capture_output=True,
+    )
+
+    # Add a secret to the shallow clone
+    (shallow_dir / "secret.py").write_text(f"TOKEN = '{synthetic_github_token()}'\n")
+    git_commit(shallow_dir, "Add token in shallow clone")
+
+    scanner = GitHistoryScanner(shallow_dir)
+    res = scanner.scan()
+
+    # Finding must be detected and preserved
+    assert len(res.findings) == 1
+    assert res.findings[0].rule_id == "SEC003"
+    # Even though incomplete due to shallow clone, findings are retained
+    assert res.summary.is_complete is False
+
+    # CLI exit code must be 1 (FINDINGS BREACH THRESHOLD), taking precedence over exit 3
+    res_cli = cli_runner.invoke(app, ["history", "scan", str(shallow_dir)])
+    assert res_cli.exit_code == EXIT_FINDINGS_BREACH_THRESHOLD
+    assert "SEC003" in res_cli.output
+
+
+def test_shallow_clone_with_explicit_depth_limit(tmp_path: Path, cli_runner: CliRunner) -> None:
+    """Verify shallow clone remains incomplete even when --max-depth is explicitly supplied."""
+    origin = make_git_repo(tmp_path / "origin")
+    (origin / "clean.py").write_text("print('clean')\n")
+    git_commit(origin, "Commit 1")
+
+    shallow_dir = tmp_path / "shallow_depth"
+    subprocess.run(
+        ["git", "clone", "--depth", "1", origin.resolve().as_uri(), str(shallow_dir)],
+        check=True,
+        capture_output=True,
+    )
+
+    scanner = GitHistoryScanner(shallow_dir, max_depth=1)
+    res = scanner.scan()
+
+    assert res.summary.is_complete is False
+    assert res.summary.scan_scope["is_shallow"] is True
+    assert res.summary.scan_scope["max_depth"] == 1
+    assert any("shallow clone" in err.lower() for err in res.errors)
+
+    res_cli = cli_runner.invoke(app, ["history", "scan", str(shallow_dir), "--max-depth", "1"])
+    assert res_cli.exit_code == EXIT_EXECUTION_ERROR
+    assert "Scan Incomplete" in res_cli.output
