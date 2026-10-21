@@ -1,0 +1,28 @@
+# Caulk Security Scanner Configuration
+# Documentation: https://github.com/kunal-gswm/caulk
+
+[scanner]
+# Minimum severity level to cause non-zero exit code (CRITICAL, HIGH, MEDIUM, LOW, INFO)
+fail_threshold = "HIGH"
+
+# Maximum file size in bytes to scan (default: 2MB)
+max_file_size_bytes = 2097152
+
+# Maximum directory depth to traverse
+max_directory_depth = 30
+
+# Exclude patterns (relative to repository root)
+exclude = [
+    "tests/*",
+    "docs/*",
+]
+
+[network]
+# External network advisory checks (e.g. OSV.dev dependency vulnerability queries)
+# Network queries are strictly disabled by default for privacy and deterministic local scanning.
+enable_advisories = false
+
+[rules]
+# Disable specific rules by ID if necessary
+# disabled = ["CFG002"]
+disabled = []
