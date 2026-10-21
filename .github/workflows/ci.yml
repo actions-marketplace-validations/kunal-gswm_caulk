@@ -107,7 +107,15 @@ jobs:
       - name: Verify Step Summary Safety & Content
         shell: bash
         run: |
-          test -f "$GITHUB_STEP_SUMMARY"
+          test -s "$GITHUB_STEP_SUMMARY"
           grep "Caulk Security Scan Report" "$GITHUB_STEP_SUMMARY"
-          ! grep "N3v3rGu3ssMeP@ss\!" "$GITHUB_STEP_SUMMARY"
-          ! grep "caulk_test_secret_token_9481948104810481" "$GITHUB_STEP_SUMMARY"
+          grep "Scan Result: ❌ Failed (Threshold: HIGH)" "$GITHUB_STEP_SUMMARY"
+          grep "Scan Result: ✅ Passed (Threshold: HIGH)" "$GITHUB_STEP_SUMMARY"
+          if grep "N3v3rGu3ssMeP@ss" "$GITHUB_STEP_SUMMARY"; then
+            echo "Error: Found unredacted password in step summary!"
+            exit 1
+          fi
+          if grep "caulk_test_secret_token_9481948104810481" "$GITHUB_STEP_SUMMARY"; then
+            echo "Error: Found unredacted secret token in step summary!"
+            exit 1
+          fi

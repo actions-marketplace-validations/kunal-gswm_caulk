@@ -59,8 +59,6 @@ runs:
         INPUT_PYTHON_VERSION: ${{ inputs.python-version }}
         ACTION_PATH: ${{ github.action_path }}
         GITHUB_WORKSPACE: ${{ github.workspace }}
-        GITHUB_STEP_SUMMARY: ${{ env.GITHUB_STEP_SUMMARY }}
-        GITHUB_OUTPUT: ${{ env.GITHUB_OUTPUT }}
         RUNNER_TEMP: ${{ runner.temp }}
       run: |
         python -m caulk.action
