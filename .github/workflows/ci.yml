@@ -104,9 +104,22 @@ jobs:
         run: |
           test "${{ steps.caulk-override.outputs.scan-result }}" = "passed"
 
+      - name: Run Caulk Action with Unsupported Python (Expect Early Rejection)
+        id: caulk-bad-python
+        uses: ./
+        continue-on-error: true
+        with:
+          path: tests/fixtures/clean
+          python-version: "3.9"
+
+      - name: Verify Unsupported Python Early Rejection
+        shell: bash
+        run: |
+          test "${{ steps.caulk-bad-python.outcome }}" = "failure"
+
       - name: Verify Job Summary Generation and Secret Safety
         shell: bash
         env:
           REPORT_PATH: ${{ steps.caulk-vuln.outputs.report-path }}
         run: |
-          python -c "import json, os; from pathlib import Path; from caulk.models import Severity; from caulk.reporting.summary import generate_step_summary; report = json.loads(Path(os.environ['REPORT_PATH']).read_text(encoding='utf-8')); summary = generate_step_summary(report, threshold=Severity.HIGH); assert 'Caulk Security Scan Report' in summary; assert 'Scan Result: ❌ Failed' in summary; assert 'N3v3rGu3ssMeP@ss' not in summary; assert 'caulk_test_secret_token_9481948104810481' not in summary; print('Step summary verified cleanly without leaking secrets.')"
+          python -c "import json, os; from pathlib import Path; from caulk.models import Severity; from caulk.reporting.summary import generate_step_summary; report = json.loads(Path(os.environ['REPORT_PATH']).read_text(encoding='utf-8')); summary = generate_step_summary(report, threshold=Severity.HIGH); assert 'Caulk Security Scan Report' in summary; assert 'Scan Result: ❌ Failed' in summary; assert 'N3v3rGu3ssMeP@ss' not in summary; assert 'caulk_test_secret_token_9481948104810481' not in summary; adv_report = {'caulk_version': '0.2.0', 'target_path': 'test\n# Injected', 'summary': {'total_findings': 1}, 'findings': [{'rule_id': 'R|1', 'title': '<script>alert(1)</script>', 'severity': 'HIGH', 'category': 'C|1', 'file_path': 'bad`file.py', 'line_number': 1}]}; adv_summary = generate_step_summary(adv_report, threshold=Severity.HIGH); assert '<script>' not in adv_summary; assert '&lt;script&gt;' in adv_summary; print('Step summary verified cleanly without leaking secrets and hardened against injection.')"

@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Official Composite GitHub Action (`action.yml`):** Production-ready composite action allowing automated security scanning in GitHub Actions on pushes and pull requests across Ubuntu and Windows runners.
 - **Automated Markdown Step Summaries:** Structured report formatting (`src/caulk/reporting/summary.py`) appending scan outcomes, file inventory metrics, severity breakdown tables, and threshold-breaching findings to `GITHUB_STEP_SUMMARY`.
+- **Markdown Injection & Forgery Hardening:** Safe dynamic Markdown rendering helpers (`escape_markdown_table_cell`, `format_table_code_cell`, `format_markdown_code_span`, `format_markdown_fenced_code`) preventing table splitting, row breakout, heading injection, active HTML tags, or code-fence escaping from malicious repository paths, filenames, or error outputs.
+- **Early Composite Input Pre-Validation:** Added early bash validation in `action.yml` prior to `actions/setup-python` execution to immediately reject unsupported Python versions (< 3.11) and invalid input parameters.
 - **Credential Redaction in Job Summaries:** Evidence is omitted from summary tables, referencing file paths and line numbers instead of raw source code snippets to prevent credential leaks into build logs.
 - **Action Pipeline Coordinator (`src/caulk/action.py`):** Dedicated execution engine for input validation, safe temporary JSON report generation in `RUNNER_TEMP`, subprocess coordination, and exit code propagation.
 - **Configurable Action Inputs:** Validated inputs for `path`, `severity-threshold` (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO`), `check-vulns` (boolean), and `python-version`.

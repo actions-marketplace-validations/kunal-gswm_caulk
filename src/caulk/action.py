@@ -84,13 +84,18 @@ def validate_action_inputs(
     # 4. Python version input validation
     if raw_python_version:
         v_str = raw_python_version.strip()
-        parts = v_str.split(".")
-        if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
-            major, minor = int(parts[0]), int(parts[1])
-            if (major, minor) < (3, 11):
-                raise ValueError(
-                    f"Unsupported Python version '{raw_python_version}'. Caulk requires Python 3.11 or newer."
-                )
+        clean_v = v_str.removeprefix(">=").strip()
+        parts = clean_v.split(".")
+        if not parts or not parts[0].isdigit() or (len(parts) > 1 and not parts[1].isdigit()):
+            raise ValueError(
+                f"Invalid python-version '{raw_python_version}'. Caulk requires Python 3.11 or newer."
+            )
+        major = int(parts[0])
+        minor = int(parts[1]) if len(parts) > 1 else 0
+        if (major, minor) < (3, 11):
+            raise ValueError(
+                f"Unsupported Python version '{raw_python_version}'. Caulk requires Python 3.11 or newer."
+            )
 
     if sys.version_info < (3, 11):  # noqa: UP036
         raise ValueError(

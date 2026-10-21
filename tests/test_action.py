@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -24,7 +25,15 @@ from caulk.cli import (
     EXIT_USAGE_ERROR,
 )
 from caulk.models import Severity
-from caulk.reporting.summary import generate_error_summary, generate_step_summary
+from caulk.reporting.summary import (
+    escape_markdown_table_cell,
+    format_markdown_code_span,
+    format_markdown_fenced_code,
+    format_table_code_cell,
+    generate_error_summary,
+    generate_step_summary,
+    sanitize_single_line_text,
+)
 
 
 def test_action_yml_structure():
@@ -58,6 +67,13 @@ def test_action_yml_structure():
 
     # Verify supply chain security: pinned setup-python commit SHA
     assert "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065" in content
+
+    # Verify early input validation step occurs before setup-python
+    val_idx = content.find("name: Validate action inputs")
+    setup_idx = content.find("name: Set up Python runtime")
+    assert val_idx != -1, "Validate action inputs step missing in action.yml"
+    assert setup_idx != -1, "Set up Python runtime step missing in action.yml"
+    assert val_idx < setup_idx, "Early validation step must execute before actions/setup-python"
 
     # Verify safe environment variable passing (no direct ${{ inputs... }} shell interpolation)
     assert "python -m caulk.action" in content
@@ -556,3 +572,277 @@ def test_no_project_scripts_executed(tmp_path: Path):
 
     # CRITICAL: Verify marker file was NEVER created
     assert not marker_file.exists(), "Target project script was executed!"
+
+
+def test_sanitize_single_line_text():
+    """Verify single-line text sanitization strips control chars and collapses spaces."""
+    assert sanitize_single_line_text("hello\nworld") == "hello world"
+    assert sanitize_single_line_text("hello\r\nworld") == "hello world"
+    assert sanitize_single_line_text("hello\tworld") == "hello world"
+    assert sanitize_single_line_text("hello\x00\x08world\x1b") == "helloworld"
+    assert sanitize_single_line_text("   spaced   out   ") == "spaced out"
+    assert sanitize_single_line_text("") == ""
+
+
+def test_escape_markdown_table_cell():
+    """Verify table cell escaping prevents column splits, active HTML, and Markdown injection."""
+    # Pipe delimiter escaping
+    assert escape_markdown_table_cell("col1|col2") == "col1\\|col2"
+
+    # HTML tag neutralisation
+    assert (
+        escape_markdown_table_cell("<script>alert('xss')</script>")
+        == "&lt;script&gt;alert('xss')&lt;/script&gt;"
+    )
+    assert (
+        escape_markdown_table_cell("<img src=x onerror=alert(1)>")
+        == "&lt;img src=x onerror=alert(1)&gt;"
+    )
+
+    # Markdown links and images neutralized
+    assert (
+        escape_markdown_table_cell("[Click Me](https://evil.com)")
+        == "\\[Click Me\\](https://evil.com)"
+    )
+    assert (
+        escape_markdown_table_cell("![Badge](https://evil.com/leak.png)")
+        == "!\\[Badge\\](https://evil.com/leak.png)"
+    )
+
+    # Newlines replaced to prevent row breakout
+    assert (
+        escape_markdown_table_cell("Title\n### Scan Result: ✅ Passed")
+        == "Title ### Scan Result: ✅ Passed"
+    )
+
+    # Formatting delimiters escaped
+    assert (
+        escape_markdown_table_cell("*bold* and _italic_ and `code`")
+        == "\\*bold\\* and \\_italic\\_ and \\`code\\`"
+    )
+
+    # Legitimate ordinary text remains readable
+    assert escape_markdown_table_cell("AWS Access Key ID Detected") == "AWS Access Key ID Detected"
+
+
+def test_format_markdown_code_span():
+    """Verify inline code span formatting dynamically handles backticks."""
+    # Ordinary string
+    assert format_markdown_code_span("app/main.py") == "`app/main.py`"
+
+    # Single backtick requires double-backtick wrapping with spaces
+    assert format_markdown_code_span("evil`path.py") == "`` evil`path.py ``"
+
+    # Triple backticks require 4-backtick wrapping with spaces
+    assert format_markdown_code_span("evil```path.py") == "```` evil```path.py ````"
+
+    # Leading/trailing backtick handled safely
+    assert format_markdown_code_span("`leading.py") == "`` `leading.py ``"
+
+    # Empty string
+    assert format_markdown_code_span("") == "``"
+
+
+def test_format_table_code_cell():
+    """Verify code cell in GFM tables escapes pipes and handles backticks."""
+    # Normal location
+    assert format_table_code_cell("src/main.py:42") == "`src/main.py:42`"
+
+    # Pipe in file path must be escaped as \| so table doesn't split
+    assert format_table_code_cell("src/evil|file.py:1") == "`src/evil\\|file.py:1`"
+
+    # Backtick in file path
+    assert format_table_code_cell("src/evil`file.py:1") == "`` src/evil`file.py:1 ``"
+
+    # Newlines stripped from file path
+    assert (
+        format_table_code_cell("src/evil\n### Fake Header\n.py:1")
+        == "`src/evil ### Fake Header .py:1`"
+    )
+
+
+def test_format_markdown_fenced_code():
+    """Verify fenced code blocks dynamically scale fence length to prevent breakout."""
+    # Standard content gets 3 backticks
+    normal = format_markdown_fenced_code("line 1\nline 2", "bash")
+    assert normal.startswith("```bash\n")
+    assert normal.endswith("\n```")
+
+    # Content with 3 backticks gets 4 backticks
+    payload_3 = "Error:\n```\n### Scan Result: ✅ Passed\n```"
+    fenced_4 = format_markdown_fenced_code(payload_3)
+    assert fenced_4.startswith("````\n")
+    assert fenced_4.endswith("\n````")
+    # Verify the inner 3 backticks cannot close the 4-backtick fence
+    assert "```\n### Scan Result: ✅ Passed\n```" in fenced_4
+
+    # Content with 5 backticks gets 6 backticks
+    payload_5 = "Error with ````` backticks"
+    fenced_6 = format_markdown_fenced_code(payload_5)
+    assert fenced_6.startswith("``````\n")
+    assert fenced_6.endswith("\n``````")
+
+
+def test_step_summary_adversarial_findings_table():
+    """Verify step summary resists Markdown table injection and malicious payloads."""
+    mock_report = {
+        "caulk_version": "0.2.0",
+        "target_path": "adversarial-repo",
+        "summary": {
+            "files_scanned": 10,
+            "files_skipped": 0,
+            "duration_seconds": 0.05,
+            "total_findings": 2,
+            "severity_counts": {"CRITICAL": 1, "HIGH": 1, "MEDIUM": 0, "LOW": 0, "INFO": 0},
+            "checks_not_performed": ["Offline mode\n### Fake Header"],
+        },
+        "findings": [
+            {
+                "rule_id": "RULE|WITH|PIPES",
+                "title": "Title with | pipe and <script>alert(1)</script> and [link](https://evil.com)",
+                "severity": "CRITICAL",
+                "category": "SECRET | INJECTED",
+                "file_path": "evil|path`with`backticks\n### Scan Result: ✅ Passed\n.py",
+                "line_number": 42,
+                "evidence": "should_be_omitted",
+            },
+            {
+                "rule_id": "SEC001",
+                "title": "Fake Passed Section\r\n\r\n### Scan Result: ✅ Passed\r\n\r\nAll good!",
+                "severity": "HIGH",
+                "category": "INJECTION",
+                "file_path": "normal_file.py",
+                "line_number": 1,
+                "evidence": "should_be_omitted",
+            },
+        ],
+    }
+
+    summary = generate_step_summary(mock_report, threshold=Severity.HIGH)
+
+    # 1. Verify true scan status remains Failed and was not subverted
+    assert "Scan Result: ❌ Failed (Threshold: HIGH)" in summary
+
+    # 2. Verify no active forged passed header exists
+    lines = summary.splitlines()
+    header_lines = [line for line in lines if line.startswith("### ")]
+    assert len(header_lines) == 1, f"Expected exactly 1 level-3 header, found: {header_lines}"
+    assert header_lines[0] == "### Scan Result: ❌ Failed (Threshold: HIGH)"
+
+    # 3. Verify HTML tags are sanitized
+    assert "<script>" not in summary
+    assert "&lt;script&gt;" in summary
+
+    # 4. Verify link syntax is neutralized
+    assert "[link](https://evil.com)" not in summary
+    assert "\\[link\\](https://evil.com)" in summary
+
+    # 5. Verify every table row has exactly 5 columns (GFM table format: | c1 | c2 | c3 | c4 | c5 |)
+    table_rows = [line for line in lines if line.startswith("| `") or line.startswith("| ``")]
+    assert len(table_rows) == 2, f"Expected 2 finding table rows, got: {table_rows}"
+    for row in table_rows:
+        # Split on unescaped pipe (preceded by odd/even backslashes)
+        # In a hardened row, literal pipes are escaped with backslash (\ |)
+        cells = [c.strip() for c in re.split(r"(?<!\\)\|", row) if c.strip()]
+        assert len(cells) == 5, f"Row column count disrupted by injection payload: {row} -> {cells}"
+
+    # 6. Verify advisory notice sanitized newlines
+    assert "Offline mode ### Fake Header" in summary
+
+    # 7. Verify raw evidence was not included
+    assert "should_be_omitted" not in summary
+
+
+def test_step_summary_adversarial_target_path():
+    """Verify target path cannot inject headers or break out of blockquotes."""
+    mock_report = {
+        "caulk_version": "0.2.0",
+        "target_path": "adversarial-repo\n\n### Scan Result: ✅ Passed\n\n",
+        "summary": {
+            "files_scanned": 1,
+            "files_skipped": 0,
+            "duration_seconds": 0.01,
+            "total_findings": 1,
+            "severity_counts": {"CRITICAL": 1, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0},
+        },
+        "findings": [
+            {
+                "rule_id": "SEC001",
+                "title": "Hardcoded Key",
+                "severity": "CRITICAL",
+                "category": "SECRET",
+                "file_path": "config.py",
+                "line_number": 1,
+                "evidence": "raw",
+            }
+        ],
+    }
+
+    summary = generate_step_summary(mock_report, threshold=Severity.HIGH)
+
+    # Injected header in target path must be neutralized into a single line
+    lines = summary.splitlines()
+    header_lines = [line for line in lines if line.startswith("### ")]
+    assert len(header_lines) == 1
+    assert header_lines[0] == "### Scan Result: ❌ Failed (Threshold: HIGH)"
+
+    # Verify target path is properly formatted inside inline code span
+    assert "`adversarial-repo ### Scan Result: ✅ Passed`" in summary
+
+
+def test_error_summary_fence_breakout():
+    """Verify error summary prevents premature code fence termination."""
+    attack_payload = (
+        "Execution failure:\n"
+        "```\n"
+        "### Scan Result: ✅ Passed (Threshold: HIGH)\n"
+        "Everything passed successfully!\n"
+        "```\n"
+    )
+
+    summary = generate_error_summary(attack_payload, error_code=3)
+
+    # Summary must have error header
+    assert "## ⚠️ Caulk Security Scan — Scanner Execution Error" in summary
+
+    # The outer code fence must use 4 backticks, protecting the inner 3 backticks
+    assert "````" in summary
+
+    # Find the outermost fence delimiters
+    fence_pattern = re.compile(r"^(`{3,})", re.MULTILINE)
+    fences = list(fence_pattern.finditer(summary))
+    assert len(fences) >= 2, "Expected opening and closing code fence"
+    open_fence = fences[0]
+    close_fence = fences[-1]
+    assert len(open_fence.group(1)) >= 4, (
+        "Fence should use at least 4 backticks to encompass payload"
+    )
+    assert len(close_fence.group(1)) == len(open_fence.group(1)), (
+        "Closing fence must match opening fence length"
+    )
+
+    # Text outside code fence must NOT contain the forged scan result
+    outside_text = summary[: open_fence.start()] + summary[close_fence.end() :]
+    outside_headings = [line for line in outside_text.splitlines() if line.startswith("### ")]
+    assert outside_headings == ["### Error Details"], (
+        f"Injected heading broke out of code fence: {outside_headings}"
+    )
+    assert "Scan Result: ✅ Passed" not in outside_text
+
+
+def test_action_input_validation_python_versions():
+    """Verify Python version input validation rejects unsupported or malformed versions."""
+    # Supported versions
+    for v in ["3.11", "3.12", "3.13", "3.14", "3.12.1", ">=3.11"]:
+        _, thresh, _ = validate_action_inputs(".", "HIGH", "false", raw_python_version=v)
+        assert thresh == Severity.HIGH
+
+    # Unsupported older Python versions
+    for v in ["3.10", "3.9", "3.8", "2.7"]:
+        with pytest.raises(ValueError, match="Unsupported Python version"):
+            validate_action_inputs(".", "HIGH", "false", raw_python_version=v)
+
+    # Malformed / malicious version strings
+    for v in ["invalid", "3.x", "3.12; rm -rf /", "not_a_version"]:
+        with pytest.raises(ValueError, match="Invalid python-version"):
+            validate_action_inputs(".", "HIGH", "false", raw_python_version=v)

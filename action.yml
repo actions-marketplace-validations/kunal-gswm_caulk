@@ -37,6 +37,38 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    - name: Validate action inputs
+      shell: bash
+      env:
+        INPUT_PYTHON_VERSION: ${{ inputs.python-version }}
+        INPUT_SEVERITY_THRESHOLD: ${{ inputs.severity-threshold }}
+        INPUT_CHECK_VULNS: ${{ inputs.check-vulns }}
+      run: |
+        VERSION="$(echo "${INPUT_PYTHON_VERSION}" | tr -d '[:space:]')"
+        CLEAN_VER="${VERSION#>=}"
+        if [[ ! "${CLEAN_VER}" =~ ^3\.(1[1-9]|[2-9][0-9])(\..*)?$ ]]; then
+          echo "::error::Unsupported or invalid python-version '${INPUT_PYTHON_VERSION}'. Caulk requires Python 3.11 or newer (e.g. '3.11', '3.12', '3.13')." >&2
+          exit 1
+        fi
+
+        THRESH="$(echo "${INPUT_SEVERITY_THRESHOLD}" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')"
+        case "${THRESH}" in
+          CRITICAL|HIGH|MEDIUM|LOW|INFO) ;;
+          *)
+            echo "::error::Invalid severity-threshold '${INPUT_SEVERITY_THRESHOLD}'. Allowed: CRITICAL, HIGH, MEDIUM, LOW, INFO." >&2
+            exit 1
+            ;;
+        esac
+
+        VULNS="$(echo "${INPUT_CHECK_VULNS}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+        case "${VULNS}" in
+          true|false|1|0|yes|no) ;;
+          *)
+            echo "::error::Invalid check-vulns '${INPUT_CHECK_VULNS}'. Allowed: true, false, 1, 0, yes, no." >&2
+            exit 1
+            ;;
+        esac
+
     - name: Set up Python runtime
       uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
       with:
