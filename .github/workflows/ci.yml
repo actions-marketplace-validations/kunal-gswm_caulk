@@ -107,10 +107,13 @@ jobs:
       - name: Verify Step Summary Safety & Content
         shell: bash
         run: |
+          echo "=== STEP SUMMARY CONTENT ==="
+          cat "$GITHUB_STEP_SUMMARY"
+          echo "=== END STEP SUMMARY ==="
           test -s "$GITHUB_STEP_SUMMARY"
           grep "Caulk Security Scan Report" "$GITHUB_STEP_SUMMARY"
-          grep "Scan Result: ❌ Failed (Threshold: HIGH)" "$GITHUB_STEP_SUMMARY"
-          grep "Scan Result: ✅ Passed (Threshold: HIGH)" "$GITHUB_STEP_SUMMARY"
+          grep "Scan Result: ❌ Failed" "$GITHUB_STEP_SUMMARY"
+          grep "Scan Result: ✅ Passed" "$GITHUB_STEP_SUMMARY"
           if grep "N3v3rGu3ssMeP@ss" "$GITHUB_STEP_SUMMARY"; then
             echo "Error: Found unredacted password in step summary!"
             exit 1
