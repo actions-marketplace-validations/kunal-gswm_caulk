@@ -186,7 +186,50 @@ flowchart TD
 
 ---
 
-## 5. GUI & Extension Readiness
+## 5. Python AST Security Analysis Architecture (`src/caulk/rules/python_sast.py`)
+
+Added in v0.3.0, the Python SAST subsystem delivers deterministic static analysis with intraprocedural taint tracking using Python's standard-library `ast` module:
+
+```mermaid
+flowchart TD
+    File[Python Source File] --> Context[ScanContext.get_ast: Cached AST Parse]
+    Context --> Analyzer[PythonASTSecurityAnalyzer]
+
+    subgraph TaintEngine ["Intraprocedural Taint Tracking Engine"]
+        Analyzer --> ScopeManager[Scope Isolation: Functions & Classes]
+        ScopeManager --> SourceDetect[Detect Taint Sources: request, input, argv]
+        SourceDetect --> Propagation[Track Assignments, f-strings, +, %, .format]
+        Propagation --> TaintClearing[Clear Taint on Safe Overwrite]
+        Propagation --> BranchUnion[Union Taint Across if/else & try/except]
+    end
+
+    subgraph SinkEvaluation ["Sink Evaluation & False-Positive Controls"]
+        BranchUnion --> SQLSink[SAST001: DB-API execute, SQLite executescript, Django raw]
+        SQLSink --> SQLFilter[Filter: Receiver Tokens, SQL Keywords, Parameterized Query Exemption]
+        BranchUnion --> ShellSink[SAST002: os.system, os.popen, subprocess shell=True]
+        ShellSink --> ShellFilter[Filter: shell=True Check, Import Aliasing, Safe List Exemption]
+    end
+
+    SQLFilter --> Findings[Typed Finding with Exact Call Line Number]
+    ShellFilter --> Findings
+    Findings --> Sanitize[Sanitize Evidence Snippet <= 120 chars]
+```
+
+### Key Architectural Principles
+1. **Zero External Dependencies:** Built purely on Python standard-library `ast`. Never imports or executes scanned repository code.
+2. **ScanContext Caching:** AST trees are parsed at most once per file (`ScanContext.get_ast`). Analysis results are cached in `_sast_cache`, enabling `SAST001` and `SAST002` to share a single traversal pass.
+3. **Execution-Order Statement Traversal:** Statements are evaluated in execution order. Taint propagates through assignments and intermediate variables (`a = input(); b = f"prefix_{a}"; c = b.strip()`), and is cleared when a variable is overwritten with a safe constant or expression.
+4. **Scope Isolation:** Function definitions (`ast.FunctionDef`, `ast.AsyncFunctionDef`) and class definitions maintain independent local scopes. Taint in one function does not leak to other functions or the module level.
+5. **False-Positive Resistance:**
+   - Parameterized queries (`cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))`) evaluate the query string argument as an untainted constant, completely avoiding false positives.
+   - Non-database `.execute()` calls (e.g. `task_runner.execute(...)`) are distinguished by checking receiver naming patterns (`cursor`, `cur`, `conn`, `db`, `session`) and SQL keyword presence.
+   - Subprocess invocations without `shell=True` (e.g. `subprocess.run(["ping", host])`) are recognized as safe argument lists and omitted.
+6. **Import Aliasing Resolution:** Tracks both module-level and function-level import aliases (e.g. `import subprocess as sp`, `from subprocess import run as execute`, `from os import system as exec_cmd`).
+7. **Line-Accurate Attribution:** Reports the exact line number of the sink call (`call.lineno`), with bounded evidence snippets sanitized against secret leakage.
+
+---
+
+## 6. GUI & Extension Readiness
 
 The CLI, rule engine, discovery walker, and reporting layers are strictly decoupled:
 - All business logic lives in `caulk.scanner.CaulkScanner`, `caulk.discovery`, and `caulk.models`.

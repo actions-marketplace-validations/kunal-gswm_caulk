@@ -150,6 +150,22 @@ def scan_command(
             help="Additional glob patterns or directory names to exclude.",
         ),
     ] = None,
+    category: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--category",
+            "-C",
+            help="Filter scan rules by category (SECRET, CONFIGURATION, DEPENDENCY, SAST).",
+        ),
+    ] = None,
+    disable: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--disable",
+            "-d",
+            help="Rule IDs to disable for this scan (e.g. SAST001).",
+        ),
+    ] = None,
 ) -> None:
     """Scan a project directory for security vulnerabilities and misconfigurations."""
     # 1. Validate target directory
@@ -184,9 +200,22 @@ def scan_command(
     if exclude:
         caulk_config.exclude_patterns.extend(exclude)
 
+    if disable:
+        caulk_config.disabled_rules.update(disable)
+
+    cat_filter: list[FindingCategory] | None = None
+    if category:
+        cat_filter = []
+        for cat_str in category:
+            try:
+                cat_filter.append(FindingCategory.from_string(cat_str))
+            except ValueError as err:
+                err_console.print(f"[bold red]Error:[/bold red] {err}")
+                raise typer.Exit(code=EXIT_USAGE_ERROR) from err
+
     # 4. Execute scan
     try:
-        scanner = CaulkScanner(config=caulk_config)
+        scanner = CaulkScanner(config=caulk_config, categories=cat_filter)
         result = scanner.scan(target_resolved)
     except Exception as err:
         err_console.print(f"[bold red]Scanner Execution Error:[/bold red] {err}")

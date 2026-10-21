@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.0] - Unreleased
 
 ### Added
+- **Python AST Static Application Security Testing (SAST001 & SAST002):**
+  - Deterministic AST analysis and intraprocedural taint tracking implemented with Python standard-library `ast` and zero third-party dependencies.
+  - `SAST001` (Python SQL Injection): Flags dynamic inputs formatted into SQL query strings (via f-strings, concatenation `+`, `%` formatting, or `.format()`) and executed by database sinks (`cursor.execute()`, `.executemany()`, `.executescript()`, `Model.objects.raw()`).
+  - `SAST002` (Command Injection via Shell Execution): Flags dynamic untrusted inputs passed to shell sinks: always-shell calls (`os.system()`, `os.popen()`, `subprocess.getoutput()`, `subprocess.getstatusoutput()`) and subprocess calls requiring `shell=True` (`subprocess.run()`, `Popen()`, `call()`, `check_call()`, `check_output()`).
+  - False-positive controls: Fully exempts parameterized queries (`cursor.execute("SELECT ...", (param,))`), static queries, non-DB `.execute()` calls (`task_runner.execute(...)`), safe subprocess argument lists without `shell=True`, and static shell commands.
+  - Comprehensive source detection: Flask request properties and methods (`args`, `form`, `values`, `cookies`, `json`, `data`, `get_json()`), Django request attributes (`GET`, `POST`, `COOKIES`, `headers`), `input()`, `builtins.input()`, and `sys.argv[...]` / `argv[...]`.
+  - Intraprocedural taint engine: Evaluates execution-order statements, tracks intermediate variable assignments, unions branch taints across `if/else` and `try/except` blocks, propagates taint through string transformations (`strip`, `lower`, `upper`, `replace`, etc.), and clears taint upon safe constant reassignment.
+  - Scope isolation: Function and class definitions maintain strictly isolated local variable scopes.
+  - Import aliasing resolution: Resolves module aliases (`import subprocess as sp`) and imported function symbols (`from os import system as sys_exec`, `from subprocess import run as execute`).
+  - Shared AST and analysis result caching in `ScanContext` (`_ast_cache`, `_sast_cache`).
+- **CLI Scan Category & Disable Flags:**
+  - Added `--category` / `-C` option to `caulk-security scan` to restrict scanner evaluation to specific categories (e.g. `--category SAST`).
+  - Added `--disable` / `-d` option to `caulk-security scan` to disable specific rules from the CLI (e.g. `--disable SAST001`).
 - **Git History Secret Scanner (`caulk-security history scan`):**
   - Dedicated CLI command to scan historical Git commits for exposed credentials across reachable branches, tags, and HEAD.
   - Streaming commit metadata and file diffs using `git log -c --raw --no-renames --root --no-abbrev`.

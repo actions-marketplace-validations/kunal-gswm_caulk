@@ -36,13 +36,14 @@ Every finding in Caulk answers four essential questions:
 
 ## 2. Supported Checks & Rules
 
-Caulk ships with 14 built-in deterministic rules across three categories:
+Caulk ships with 16 built-in deterministic rules across four categories:
 
 | Category | Rules | Description |
 | :--- | :--- | :--- |
 | **Secrets** | `SEC001` - `SEC008` | Detects private cryptographic keys (RSA/EC/OpenSSH), AWS access keys, GitHub tokens, Google API keys, Slack webhooks, database connection strings with embedded passwords, credential variable assignments, and accidentally committed `.env` files. |
 | **Configuration** | `CFG001` - `CFG004` | Detects hardcoded `DEBUG = True` in application deployment configs, overly permissive wildcard CORS with credentials, Dockerfiles running as root (`UID 0`), and private keys/secrets copied into Docker images. |
 | **Dependencies** | `DEP001` - `DEP003` | Inventories dependencies across `package.json`, `package-lock.json` (v1/v2/v3), `requirements.txt`, and `pyproject.toml`. Flags wildcard/unpinned dependencies and missing lockfiles. Includes optional OSV advisory vulnerability checks (`--check-vulns`). |
+| **SAST** | `SAST001` - `SAST002` | Deterministic Python AST analysis with intraprocedural taint tracking. Detects SQL injection (`SAST001`) and command injection via shell execution (`SAST002`) while actively avoiding false positives on parameterized queries and safe argument lists. |
 
 For complete rule documentation, see [docs/detection-coverage.md](docs/detection-coverage.md).
 
@@ -148,6 +149,64 @@ caulk-security scan . --severity-threshold CRITICAL
 # Fail on HIGH or CRITICAL (default):
 caulk-security scan . --severity-threshold HIGH
 ```
+
+### Filter Scan by Rule Category or Disable Specific Rules
+
+```bash
+# Run only SAST analysis rules:
+caulk-security scan . --category SAST
+
+# Run secrets and SAST rules:
+caulk-security scan . --category SECRET --category SAST
+
+# Disable specific rules for a scan:
+caulk-security scan . --disable SAST001
+```
+
+### Python AST Security Analysis (SAST001 & SAST002)
+
+Caulk performs deterministic, local-first static analysis using Python standard library `ast` with intraprocedural taint tracking:
+
+#### Rule Overview
+
+- **`SAST001` (Python SQL Injection — Severity: HIGH):** Flags dynamic values formatted into SQL queries (via f-strings, concatenation `+`, `%` formatting, or `.format()`) and passed to database execution sinks:
+  - **Sinks:** DB-API `.execute()`, `.executemany()`, SQLite `.executescript()`, Django `.raw()`.
+  - **False-Positive Controls:** Parameterized queries (`cursor.execute("SELECT ... WHERE id = %s", (param,))`), static queries, and non-DB `.execute()` calls (e.g. `task_runner.execute(...)`) are **not** flagged.
+
+- **`SAST002` (Command Injection via Shell Execution — Severity: HIGH):** Flags dynamic untrusted values passed to shell command execution sinks:
+  - **Always-Shell Sinks:** `os.system()`, `os.popen()`, `subprocess.getoutput()`, `subprocess.getstatusoutput()`.
+  - **Subprocess Sinks (requiring `shell=True`):** `subprocess.run()`, `subprocess.Popen()`, `subprocess.call()`, `subprocess.check_call()`, `subprocess.check_output()`.
+  - **Import Aliasing:** Resolves module and function aliases (e.g. `import subprocess as sp`, `from subprocess import run as execute`, `from os import system as sys_exec`).
+  - **False-Positive Controls:** Safe argument lists without `shell=True` (e.g. `subprocess.run(["ping", "-c", "1", host])`) and static commands are **not** flagged.
+
+#### Supported Taint Sources
+
+- **Flask:** `request.args`, `request.form`, `request.values`, `request.cookies`, `request.json`, `request.data`, `request.get_json()`, with indexing or `.get()`.
+- **Django:** `request.GET`, `request.POST`, `request.COOKIES`, `request.headers`, with indexing or `.get()`.
+- **Standard Input & CLI Arguments:** `input()`, `builtins.input()`, `sys.argv[...]`, `argv[...]`.
+
+#### Safe vs Unsafe Patterns
+
+```python
+# ❌ VULNERABLE: Dynamic SQL string formatting (SAST001)
+user_id = request.args.get("id")
+cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")
+
+# ✅ SAFE: Parameterized SQL query (Caulk does not flag)
+user_id = request.args.get("id")
+cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+
+# ❌ VULNERABLE: Command injection via shell=True (SAST002)
+target = request.args.get("target")
+subprocess.run(f"ping -c 1 {target}", shell=True)
+
+# ✅ SAFE: Command argument list without shell invocation (Caulk does not flag)
+target = request.args.get("target")
+subprocess.run(["ping", "-c", "1", target])
+```
+
+> [!NOTE]
+> **Static Analysis Scope & Boundaries:** Caulk's SAST is strictly bounded, intraprocedural static analysis. It tracks taint propagation across execution-order statements, assignments, branches, string methods (`.strip()`, `.lower()`, `.replace()`), and intermediate variables within each function and module scope. Caulk never executes or imports repository code. It does not perform interprocedural cross-file pointer analysis or dynamic symbolic execution.
 
 ### Optional External Dependency Vulnerability Check
 

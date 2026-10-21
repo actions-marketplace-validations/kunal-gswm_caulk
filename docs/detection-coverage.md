@@ -45,6 +45,15 @@ Caulk includes a dedicated Git history inspection subsystem (`caulk-security his
 - **Deleted & Replaced Secrets:** Detects secrets even if removed, renamed, or replaced with placeholders in subsequent commits.
 - **5-Point Remediation:** Generates tailored, actionable 5-step guidance (historical exposure, deletion ineffectiveness, immediate provider rotation, access log auditing, and safe post-rotation history rewriting).
 
+### E. Python Static Application Security Testing (`SAST`) — Added in v0.3.0
+
+Caulk implements deterministic AST-based static analysis with intraprocedural taint tracking across Python source files:
+
+| Rule ID | Title | Severity | Confidence | Target Files | Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `SAST001` | Python SQL Injection | `HIGH` | `HIGH` | `*.py` | Detects unsanitized dynamic values (from Flask/Django requests, `input()`, `sys.argv`) formatted via f-strings, concatenation (`+`), `%` formatting, or `.format()` and executed by database sinks (`cursor.execute()`, `.executemany()`, `.executescript()`, `.raw()`). Parameterized queries (`%s`, `?`, `:param`) and static queries are not flagged. |
+| `SAST002` | Command Injection via Shell Execution | `HIGH` | `HIGH` | `*.py` | Detects dynamic untrusted values passed to always-shell sinks (`os.system()`, `os.popen()`, `subprocess.getoutput()`, `subprocess.getstatusoutput()`) or subprocess calls with `shell=True` (`subprocess.run()`, `Popen()`, `call()`, `check_call()`, `check_output()`). Resolves import aliases. Safe argument lists without `shell=True` are not flagged. |
+
 ---
 
 ## 2. Planned Checks (Future Milestones)
@@ -57,6 +66,6 @@ The following capabilities are architected for upcoming releases and will be add
 2. **Advanced Infrastructure-as-Code (IaC) Rules:**
    - Terraform / OpenTofu security misconfiguration checks (unencrypted S3 buckets, open security groups `0.0.0.0/0`).
    - GitHub Actions workflow analysis (unpinned actions, dangerous `pull_request_target` triggers, secret exfiltration vectors).
-4. **Targeted Semantic AST Checks:**
-   - SQL injection detection for raw string interpolation in database driver queries (`cursor.execute(f"SELECT ... {user_input}")`).
+3. **Targeted Semantic AST Checks:**
    - Server-Side Request Forgery (SSRF) heuristics on unchecked URL fetching.
+   - Insecure deserialization checks (`pickle.loads`, `yaml.load` with unsafe loaders).

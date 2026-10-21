@@ -13,6 +13,10 @@ from caulk.rules.dependencies import (
     MissingLockfileRule,
     UnpinnedDependencyRule,
 )
+from caulk.rules.python_sast import (
+    ShellCommandInjectionRule,
+    SQLInjectionRule,
+)
 from caulk.rules.registry import RuleRegistry, registry
 from caulk.rules.secrets import (
     AWSAccessKeyRule,
@@ -44,6 +48,9 @@ DEFAULT_RULES: list[Rule] = [
     # Dependency rules
     UnpinnedDependencyRule(),
     MissingLockfileRule(),
+    # SAST rules
+    SQLInjectionRule(),
+    ShellCommandInjectionRule(),
 ]
 
 
@@ -63,6 +70,8 @@ __all__ = [
     "Rule",
     "RuleRegistry",
     "ScanContext",
+    "ShellCommandInjectionRule",
+    "SQLInjectionRule",
     "register_default_rules",
     "registry",
 ]

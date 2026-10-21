@@ -6,6 +6,7 @@ impact explanations, and clear remediation guidance.
 
 from __future__ import annotations
 
+import ast
 import fnmatch
 from abc import ABC
 from dataclasses import dataclass, field
@@ -24,6 +25,8 @@ class ScanContext:
     config: CaulkConfig
     _file_cache: dict[Path, str] = field(default_factory=dict)
     _line_cache: dict[Path, list[str]] = field(default_factory=dict)
+    _ast_cache: dict[Path, ast.AST | None] = field(default_factory=dict)
+    _sast_cache: dict[Path, tuple[list[Finding], list[Finding]]] = field(default_factory=dict)
 
     def read_text(self, file: DiscoveredFile) -> str:
         """Safely read text content of a discovered file with caching."""
@@ -48,6 +51,20 @@ class ScanContext:
         lines = text.splitlines()
         self._line_cache[file.path] = lines
         return lines
+
+    def get_ast(self, file: DiscoveredFile) -> ast.AST | None:
+        """Parse and cache Python AST for a discovered file, or None if invalid."""
+        if file.path in self._ast_cache:
+            return self._ast_cache[file.path]
+
+        text = self.read_text(file)
+        try:
+            tree = ast.parse(text, filename=str(file.path))
+        except (SyntaxError, ValueError, TypeError):
+            tree = None
+
+        self._ast_cache[file.path] = tree
+        return tree
 
 
 class Rule(ABC):
