@@ -103,8 +103,44 @@ class Rule(ABC):
 
 ---
 
-## 3. GUI & Extension Readiness
+## 3. GitHub Action Architecture
+
+Caulk provides an official composite action (`action.yml`) paired with an action runtime coordinator (`src/caulk/action.py`) and step summary renderer (`src/caulk/reporting/summary.py`):
+
+```mermaid
+flowchart TD
+    GHA[GitHub Actions Runner] --> ActionYml[action.yml: Composite Action]
+    ActionYml --> SetupPy[setup-python: Pinned SHA]
+    ActionYml --> PipInstall["pip install: GITHUB_ACTION_PATH"]
+    ActionYml --> ActionPy[python -m caulk.action]
+
+    subgraph ActionCoordinator ["Action Runtime Coordinator (action.py)"]
+        ActionPy --> InputVal[Validate Inputs: path, threshold, check-vulns]
+        ActionPy --> WorkspaceResolve[Resolve Path vs GITHUB_WORKSPACE]
+        ActionPy --> RunScanner[Subprocess: caulk-security scan]
+        RunScanner --> TempReport[Write JSON: RUNNER_TEMP]
+        TempReport --> SummaryGen[generate_step_summary: summary.py]
+        SummaryGen --> StepSummary[Append GITHUB_STEP_SUMMARY]
+        SummaryGen --> ActionOutputs[Emit GITHUB_OUTPUT: scan-result, findings-count, report-path]
+        ActionOutputs --> ExitHandler[Exit with Scanner Exit Code]
+    end
+```
+
+### Key Architectural Safeguards in GitHub Actions
+1. **Isolated Path Coordinates:**
+   - `GITHUB_ACTION_PATH` strictly identifies the checked-out Caulk action repository files used for installing Caulk and its runtime dependencies.
+   - `GITHUB_WORKSPACE` strictly identifies the scanned repository's working directory.
+2. **Safe Input Passing:**
+   - Action parameters are never interpolated into shell scripts (`${{ inputs.path }}` inside bash is avoided). All inputs pass through structured environment variables (`INPUT_PATH`, `INPUT_SEVERITY_THRESHOLD`, `INPUT_CHECK_VULNS`).
+3. **Evidence Redaction in CI:**
+   - `summary.py` formats Markdown tables with Rule IDs, Severity, and Location references (`file:line`). Code snippets and raw matched strings are excluded to prevent credentials from persisting in build summaries.
+4. **Exit Code Propagation:**
+   - Scanner exit codes (`0` clean, `1` breach, `2` usage error, `3` execution error) are preserved. Finding-based failures exit with code 1 **only after** the step summary and outputs have been written.
+
+---
+
+## 4. GUI & Extension Readiness
 
 The CLI, rule engine, discovery walker, and reporting layers are strictly decoupled:
 - All business logic lives in `caulk.scanner.CaulkScanner`, `caulk.discovery`, and `caulk.models`.
-- A future desktop GUI (e.g., PySide / Electron wrapper) or CI GitHub Action can import `CaulkScanner` directly or consume standard JSON reports without code duplication.
+- A future desktop GUI (e.g., PySide / Electron wrapper) or CI integration imports `CaulkScanner` directly or consumes standard JSON reports without code duplication.

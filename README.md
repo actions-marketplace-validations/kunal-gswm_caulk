@@ -253,34 +253,118 @@ Caulk uses deterministic, distinct exit codes suitable for CI/CD automation:
 
 ---
 
-## 8. Security & Privacy Design
+## 8. GitHub Action Integration
+
+Caulk provides an official composite GitHub Action (`action.yml`) to scan repositories deterministically on pushes and pull requests across both **Ubuntu** (`ubuntu-latest`) and **Windows** (`windows-latest`) runners.
+
+### Features
+- **Deterministic & Local-First:** Runs without cloud accounts, telemetry, or external AI APIs.
+- **Evidence Redaction:** Discovered credentials are never printed in GitHub Step Summaries or logs.
+- **Job Summaries:** Renders a clean Markdown report with file inventory stats and severity tables directly into `GITHUB_STEP_SUMMARY`.
+- **Zero Repo Execution:** Never installs repository dependencies or executes scanned repository scripts.
+- **Supply-Chain Guarded:** Pinned composite actions and explicit read-only permissions.
+
+### Example Consumer Workflow
+
+Create `.github/workflows/security.yml` in your repository:
+
+```yaml
+name: Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Security best practice: Explicitly declare minimal read-only permissions
+permissions:
+  contents: read
+
+jobs:
+  caulk-scan:
+    name: Caulk Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Run Caulk Security Checker
+        # Note: Use @main or an immutable commit SHA until an official release tag is published
+        uses: kunal-gswm/caulk@main
+        with:
+          path: .
+          severity-threshold: HIGH
+          check-vulns: false
+          python-version: "3.12"
+```
+
+### Action Inputs
+
+| Input | Description | Required | Default | Allowed Values |
+| :--- | :--- | :---: | :---: | :--- |
+| `path` | Path to repository or subfolder to scan | No | `.` | Directory path relative to `GITHUB_WORKSPACE` |
+| `severity-threshold` | Minimum severity level to fail the job | No | `HIGH` | `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO` |
+| `check-vulns` | Enable outbound queries to OSV for package CVEs | No | `false` | `true`, `false` |
+| `python-version` | Python runtime version for scanner environment | No | `3.12` | `3.11`, `3.12`, `3.13` |
+
+### Action Outputs
+
+| Output | Description | Example |
+| :--- | :--- | :--- |
+| `scan-result` | High-level outcome of the scan | `passed`, `failed`, or `error` |
+| `findings-count` | Total count of security findings discovered | `0`, `3` |
+| `report-path` | Absolute path to the generated JSON report | `/tmp/caulk-report-abc12345.json` |
+
+### Consuming Action Outputs
+
+```yaml
+      - name: Run Caulk
+        id: caulk
+        uses: kunal-gswm/caulk@main
+        continue-on-error: true
+
+      - name: Upload Report Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: caulk-security-report
+          path: ${{ steps.caulk.outputs.report-path }}
+```
+
+---
+
+## 9. Security & Privacy Design
 
 - **Zero Telemetry:** Caulk collects no usage analytics, repository names, or user data.
-- **Credential Redaction:** Secrets are automatically masked in evidence snippets, terminal tables, JSON reports, and logs.
+- **Credential Redaction:** Secrets are automatically masked in evidence snippets, terminal tables, JSON reports, step summaries, and logs.
 - **Untrusted Input Protection:** Traversal defends against symlink boundary escapes, path traversal attacks, and recursion loops.
-- **No Untrusted Execution:** Caulk never invokes project scripts, loads modules dynamically, or installs dependencies.
-- **Network Boundaries:** Network calls are disabled by default. The optional `--check-vulns` flag queries only package coordinates (name + version) against the public OSV database; proprietary source code and secrets are never transmitted.
+- **No Untrusted Execution:** Caulk never invokes project scripts, loads modules dynamically, or installs dependencies from scanned manifests.
+- **Network Boundaries:** Network calls are disabled by default. The optional `--check-vulns` flag queries only package coordinates (`name` and resolved `version`) against the public OSV batch API (`api.osv.dev`). Proprietary source code, file paths, and credentials are **never** transmitted.
+- **Safe CI Permissions:** Example workflows and actions use minimal `contents: read` permissions. Caulk does not request write permissions or comment on PRs through privileged tokens.
 
 See [docs/threat-model.md](docs/threat-model.md) for detailed threat modeling.
 
 ---
 
-## 9. Roadmap
+## 10. Roadmap
 
 - [x] Initial CLI, deterministic discovery engine, finding data models, and redaction.
 - [x] MVP Secret rules (`SEC001`-`SEC008`).
 - [x] MVP Configuration rules (`CFG001`-`CFG004`).
 - [x] Python and JavaScript dependency inventory & optional OSV advisory integration.
 - [x] Automated CI testing across Ubuntu and Windows for Python 3.11, 3.12, 3.13.
+- [x] Official GitHub Action composite action (`action.yml`) with automated step summary generation.
 - [ ] Self-contained Windows `.exe` packaged via PyInstaller.
-- [ ] Official GitHub Action for pull request and push checks.
 - [ ] Git pre-commit hook integration.
 - [ ] SARIF report format for GitHub Advanced Security code scanning tab.
 - [ ] Standalone desktop GUI.
 
 ---
 
-## 10. License & Security Reporting
+## 11. License & Security Reporting
 
 - **License:** Open source under the [MIT License](LICENSE).
 - **Security Vulnerabilities:** Please report security issues privately via [GitHub Private Vulnerability Reporting](https://github.com/kunal-gswm/caulk/security/advisories) as detailed in [SECURITY.md](SECURITY.md).
