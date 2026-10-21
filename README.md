@@ -381,8 +381,8 @@ jobs:
           persist-credentials: false
 
       - name: Run Caulk Security Checker
-        # Note: Pin to an official release tag (e.g. @v0.2.0) or an immutable commit SHA
-        uses: kunal-gswm/caulk@v0.2.0
+        # Note: Pin to an official release tag (e.g. @v0.3.0) or an immutable commit SHA
+        uses: kunal-gswm/caulk@v0.3.0
         with:
           path: .
           severity-threshold: HIGH
@@ -417,7 +417,7 @@ jobs:
           persist-credentials: false
 
       - name: Run Caulk Git History Scan
-        uses: kunal-gswm/caulk@v0.2.0
+        uses: kunal-gswm/caulk@v0.3.0
         with:
           scan-history: true
           severity-threshold: HIGH
@@ -446,7 +446,7 @@ jobs:
 ```yaml
       - name: Run Caulk
         id: caulk
-        uses: kunal-gswm/caulk@v0.2.0
+        uses: kunal-gswm/caulk@v0.3.0
         continue-on-error: true
 
       - name: Upload Report Artifact
