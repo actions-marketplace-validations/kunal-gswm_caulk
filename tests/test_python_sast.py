@@ -722,3 +722,443 @@ def run(request):
     assert sast_finding["file_path"] == "app.py"
     assert sast_finding["line_number"] == 6
     assert "os.system" in sast_finding["evidence"]
+
+
+# ==============================================================================
+# 8. Scope, Dataflow, and Edge-Case Regression Corpus (Prompt Scenarios 1-10)
+# ==============================================================================
+
+
+def test_scenario_1_tainted_input_transformed_reassigned_to_sink(tmp_path: Path):
+    """Scenario 1: Tainted input assigned, transformed via string methods, reassigned, reaching sink."""
+    code = """
+def handler(request):
+    raw_val = request.args.get("id")
+    cleaned = raw_val.strip()
+    upper = cleaned.upper()
+    final_query = f"SELECT * FROM accounts WHERE id = '{upper}'"
+    cursor.execute(final_query)
+"""
+    sql_findings, _ = _scan_snippet(code, tmp_path)
+    assert len(sql_findings) == 1
+    assert sql_findings[0].line_number == 7
+
+
+def test_scenario_2_taint_on_one_branch_constant_on_other(tmp_path: Path):
+    """Scenario 2: Variable tainted on one branch and overwritten with constant on another."""
+    code = """
+import os
+
+def branch_merge(request, flag):
+    if flag:
+        cmd = request.args.get("c")
+    else:
+        cmd = "echo constant"
+    os.system(cmd)
+"""
+    _, shell_findings = _scan_snippet(code, tmp_path)
+    # Conservative merge keeps taint reachable from the if branch
+    assert len(shell_findings) == 1
+
+
+def test_scenario_3_branches_assigning_different_values(tmp_path: Path):
+    """Scenario 3: Variable assigned different tainted values in if/else branches and used after."""
+    code = """
+def branch_choice(request, mode):
+    if mode == "admin":
+        tbl = request.args.get("t1")
+    else:
+        tbl = request.form.get("t2")
+    cursor.execute(f"SELECT * FROM {tbl}")
+"""
+    sql_findings, _ = _scan_snippet(code, tmp_path)
+    assert len(sql_findings) == 1
+
+
+def test_scenario_4_try_except_finally_reachable_taint(tmp_path: Path):
+    """Scenario 4: Taint propagation through try/except/finally preserves reachable values."""
+    code = """
+import os
+
+def cleanup_sink(request):
+    try:
+        cmd = request.args.get("c")
+    except Exception:
+        cmd = "fallback"
+    finally:
+        os.system(cmd)
+"""
+    _, shell_findings = _scan_snippet(code, tmp_path)
+    assert len(shell_findings) == 1
+    assert shell_findings[0].line_number == 10
+
+
+def test_scenario_4_finally_overwritten_clears_taint(tmp_path: Path):
+    """Scenario 4b: If finally unconditionally overwrites variable with constant, taint is cleared."""
+    code = """
+import os
+
+def safe_finally(request):
+    try:
+        cmd = request.args.get("c")
+    finally:
+        cmd = "echo safe"
+    os.system(cmd)
+"""
+    _, shell_findings = _scan_snippet(code, tmp_path)
+    assert len(shell_findings) == 0
+
+
+def test_scenario_5_loop_variable_tuple_unpacking(tmp_path: Path):
+    """Scenario 5: Tainted iterable assigned to unpacked loop variables."""
+    code = """
+def loop_items(request):
+    for key, val in request.form.items():
+        cursor.execute(f"SELECT * FROM settings WHERE key = '{key}' AND val = '{val}'")
+"""
+    sql_findings, _ = _scan_snippet(code, tmp_path)
+    assert len(sql_findings) == 1
+
+
+def test_scenario_6_variable_reassignment_clears_taint(tmp_path: Path):
+    """Scenario 6: Variable reassigned to a safe constant clears prior taint."""
+    code = """
+import os
+
+def clear_taint(request):
+    cmd = request.args.get("c")
+    cmd = "echo clean"
+    os.system(cmd)
+"""
+    _, shell_findings = _scan_snippet(code, tmp_path)
+    assert len(shell_findings) == 0
+
+
+def test_scenario_7_module_vs_function_local_scope(tmp_path: Path):
+    """Scenario 7: Module-level tainted variable vs function-local safe variable with same name."""
+    code = """
+import os
+
+# Module level tainted variable
+val = request.args.get("val")
+
+def safe_function():
+    val = "echo safe"
+    os.system(val)
+
+def unsafe_function(request):
+    val = request.args.get("val")
+    os.system(val)
+
+os.system(val)
+"""
+    _, shell_findings = _scan_snippet(code, tmp_path)
+    # safe_function() must NOT trigger; unsafe_function() and module level MUST trigger
+    assert len(shell_findings) == 2
+    lines = {f.line_number for f in shell_findings}
+    assert 13 in lines  # inside unsafe_function
+    assert 15 in lines  # at module level
+
+
+def test_scenario_8_imports_declared_in_branch_and_nested_scope(tmp_path: Path):
+    """Scenario 8: Imports declared inside if blocks preserved, but isolated across functions."""
+    code = """
+def dynamic_import(request, cond):
+    if cond:
+        import os as shell_runner
+    shell_runner.system(request.args.get("c"))
+
+def nested_scope(request):
+    def inner():
+        import os as local_runner
+        local_runner.system(request.args.get("c"))
+    inner()
+"""
+    _, shell_findings = _scan_snippet(code, tmp_path)
+    assert len(shell_findings) == 2
+
+
+def test_scenario_9_calls_nested_inside_expressions(tmp_path: Path):
+    """Scenario 9: Sinks nested inside return statements and conditional tests."""
+    code = """
+import os
+
+def check_command(request):
+    if os.system(request.args.get("c")) == 0:
+        return True
+    return False
+
+def return_query(request):
+    return cursor.execute(f"SELECT * FROM items WHERE id = {request.args['id']}")
+"""
+    sql_findings, shell_findings = _scan_snippet(code, tmp_path)
+    assert len(shell_findings) == 1
+    assert len(sql_findings) == 1
+
+
+def test_scenario_10_repeated_scans_same_scan_context(tmp_path: Path):
+    """Scenario 10: Repeated scans on same ScanContext yield stable results without cache contamination."""
+    file_a = tmp_path / "a.py"
+    file_a.write_text(
+        "def h(request): cursor.execute(f'SELECT * FROM u WHERE id = {request.args[\"id\"]}')",
+        encoding="utf-8",
+    )
+
+    file_b = tmp_path / "b.py"
+    file_b.write_text("def h(): cursor.execute('SELECT 1')", encoding="utf-8")
+
+    disc_a = DiscoveredFile(path=file_a, rel_path="a.py", size_bytes=file_a.stat().st_size)
+    disc_b = DiscoveredFile(path=file_b, rel_path="b.py", size_bytes=file_b.stat().st_size)
+
+    inventory = ProjectInventory(root_path=tmp_path, files=[disc_a, disc_b], ecosystems={"python"})
+    context = ScanContext(inventory=inventory, config=CaulkConfig())
+
+    sql_a1, shell_a1 = run_sast_analysis(disc_a, context)
+    sql_b1, shell_b1 = run_sast_analysis(disc_b, context)
+
+    # Second pass with same context
+    sql_a2, shell_a2 = run_sast_analysis(disc_a, context)
+    sql_b2, shell_b2 = run_sast_analysis(disc_b, context)
+
+    assert len(sql_a1) == 1
+    assert len(sql_a2) == 1
+    assert len(sql_b1) == 0
+    assert len(sql_b2) == 0
+    assert sql_a1[0].fingerprint == sql_a2[0].fingerprint
+
+
+# ==============================================================================
+# 9. SQL Injection Audit (SAST001) Precision Tests
+# ==============================================================================
+
+
+def test_sql_dynamic_string_with_second_parameter_present(tmp_path: Path):
+    """Unsafe dynamic SQL formatted in first argument is flagged even with second params arg."""
+    code = """
+def query_with_extra_arg(request):
+    uid = request.args.get("id")
+    status = "active"
+    cursor.execute(f"SELECT * FROM users WHERE id = '{uid}' AND status = %s", (status,))
+"""
+    sql_findings, _ = _scan_snippet(code, tmp_path)
+    assert len(sql_findings) == 1
+    assert sql_findings[0].line_number == 5
+
+
+def test_sql_keyword_arguments_sinks(tmp_path: Path):
+    """SQL sink called with keyword arguments statement= or raw_query=."""
+    code = """
+def query_kw(request):
+    uid = request.args.get("id")
+    cursor.execute(statement=f"SELECT * FROM users WHERE id = {uid}")
+"""
+    sql_findings, _ = _scan_snippet(code, tmp_path)
+    assert len(sql_findings) == 1
+
+
+def test_sql_uncommon_receiver_with_sql_keyword(tmp_path: Path):
+    """Database receiver with uncommon name executing SQL keyword query is detected."""
+    code = """
+def query_custom_repo(request):
+    tbl = request.args.get("table")
+    repo.execute(f"SELECT * FROM {tbl}")
+"""
+    sql_findings, _ = _scan_snippet(code, tmp_path)
+    assert len(sql_findings) == 1
+
+
+def test_sql_unrelated_objects_methods_not_flagged(tmp_path: Path):
+    """Unrelated objects exposing execute, executemany, or raw without SQL keywords are NOT flagged."""
+    code = """
+def harmless_calls(request):
+    data = request.args.get("data")
+    camera.raw(data)
+    audio_stream.raw(data)
+    task_runner.execute(f"run_task_{data}")
+    http_client.execute(f"/api/v1/{data}")
+"""
+    sql_findings, _ = _scan_snippet(code, tmp_path)
+    assert len(sql_findings) == 0
+
+
+def test_sql_multiple_sinks_on_same_line(tmp_path: Path):
+    """Multiple SQL sinks on the same line must both be detected with distinct fingerprints."""
+    code = """
+def multi_query(request):
+    a = request.args['a']; b = request.args['b']
+    cursor.execute(f"SELECT 1 FROM {a}"); cursor.execute(f"SELECT 2 FROM {b}")
+"""
+    sql_findings, _ = _scan_snippet(code, tmp_path)
+    assert len(sql_findings) == 2
+    assert sql_findings[0].fingerprint != sql_findings[1].fingerprint
+
+
+def test_sql_multiline_evidence_preserves_query_context(tmp_path: Path):
+    """Multiline sink call evidence includes the full call expression rather than just cursor.execute(."""
+    code = """
+def multiline_sql(request):
+    cursor.execute(
+        f"SELECT * FROM users WHERE id = '{request.args.get('id')}'"
+    )
+"""
+    sql_findings, _ = _scan_snippet(code, tmp_path)
+    assert len(sql_findings) == 1
+    assert "SELECT * FROM users" in sql_findings[0].evidence
+    assert sql_findings[0].line_number == 3
+
+
+def test_sql_tainted_data_not_reaching_sink(tmp_path: Path):
+    """Tainted input that is never passed to any SQL sink produces no findings."""
+    code = """
+def safe_flow(request):
+    name = request.args.get("name")
+    print(f"Logged user: {name}")
+    cursor.execute("SELECT * FROM users")
+"""
+    sql_findings, _ = _scan_snippet(code, tmp_path)
+    assert len(sql_findings) == 0
+
+
+# ==============================================================================
+# 10. Command Injection Audit (SAST002) Precision Tests
+# ==============================================================================
+
+
+def test_shell_subprocess_safe_list_arguments_not_flagged(tmp_path: Path):
+    """Ordinary subprocess calls passing separate arguments without shell=True are safe."""
+    code = """
+import subprocess
+
+def safe_run(request):
+    user_file = request.args.get("file")
+    subprocess.run(["ls", "-la", user_file])
+    subprocess.run(["cat", user_file], shell=False)
+"""
+    _, shell_findings = _scan_snippet(code, tmp_path)
+    assert len(shell_findings) == 0
+
+
+def test_shell_subprocess_shell_true_keyword_argument(tmp_path: Path):
+    """Subprocess with shell=True passed via keyword argument args= is flagged."""
+    code = """
+import subprocess
+
+def vuln_run(request):
+    cmd = request.args.get("cmd")
+    subprocess.run(args=f"echo {cmd}", shell=True)
+"""
+    _, shell_findings = _scan_snippet(code, tmp_path)
+    assert len(shell_findings) == 1
+
+
+def test_shell_multiple_sinks_on_same_line(tmp_path: Path):
+    """Multiple shell sinks on the same line must both be detected with distinct fingerprints."""
+    code = """
+import os
+
+def multi_shell(request):
+    c1 = request.args['c1']; c2 = request.args['c2']
+    os.system(c1); os.system(c2)
+"""
+    _, shell_findings = _scan_snippet(code, tmp_path)
+    assert len(shell_findings) == 2
+    assert shell_findings[0].fingerprint != shell_findings[1].fingerprint
+
+
+# ==============================================================================
+# 11. AST Robustness, Encoding, and Error Handling
+# ==============================================================================
+
+
+def test_ast_robustness_syntax_error_file_does_not_break_valid_files(tmp_path: Path):
+    """A syntax error in one file must not crash scanning of other valid files."""
+    file_bad = tmp_path / "broken.py"
+    file_bad.write_text("def invalid syntax (():", encoding="utf-8")
+
+    file_good = tmp_path / "good.py"
+    file_good.write_text(
+        "def h(request): cursor.execute(f'SELECT * FROM u WHERE id = {request.args[\"id\"]}')",
+        encoding="utf-8",
+    )
+
+    disc_bad = DiscoveredFile(
+        path=file_bad, rel_path="broken.py", size_bytes=file_bad.stat().st_size
+    )
+    disc_good = DiscoveredFile(
+        path=file_good, rel_path="good.py", size_bytes=file_good.stat().st_size
+    )
+
+    inventory = ProjectInventory(
+        root_path=tmp_path, files=[disc_bad, disc_good], ecosystems={"python"}
+    )
+    context = ScanContext(inventory=inventory, config=CaulkConfig())
+
+    sql_bad, _ = run_sast_analysis(disc_bad, context)
+    sql_good, _ = run_sast_analysis(disc_good, context)
+
+    assert len(sql_bad) == 0
+    assert len(sql_good) == 1
+
+
+def test_ast_robustness_unicode_identifiers_and_queries(tmp_path: Path):
+    """Unicode identifiers and strings are properly tracked and analyzed."""
+    code = """
+def traitement(request):
+    données = request.args.get("nom")
+    requête = f"SELECT * FROM utilisateurs WHERE nom = '{données}'"
+    cursor.execute(requête)
+"""
+    sql_findings, _ = _scan_snippet(code, tmp_path)
+    assert len(sql_findings) == 1
+
+
+def test_ast_robustness_empty_and_comment_files(tmp_path: Path):
+    """Empty files and files containing only comments or docstrings produce 0 findings."""
+    code = """# Just a comment file
+\"\"\"Docstring only\"\"\"
+"""
+    sql_findings, shell_findings = _scan_snippet(code, tmp_path)
+    assert len(sql_findings) == 0
+    assert len(shell_findings) == 0
+
+
+def test_ast_robustness_deeply_nested_expressions_safety(tmp_path: Path):
+    """Deeply nested expressions that trigger RecursionError are handled safely without crashing."""
+    # Build a file with nested parentheses
+    nested = "(" * 2000 + "1" + ")" * 2000
+    code = f"x = {nested}\n"
+    sql_findings, shell_findings = _scan_snippet(code, tmp_path)
+    assert len(sql_findings) == 0
+    assert len(shell_findings) == 0
+
+
+# ==============================================================================
+# 12. Finding Quality and Evidence Redaction
+# ==============================================================================
+
+
+def test_finding_evidence_redacts_embedded_secret(tmp_path: Path):
+    """Secrets embedded in source lines containing sinks are redacted in finding evidence."""
+    code = """
+def handler(request):
+    cursor.execute(f"SELECT * FROM audit WHERE token = 'ghp_EXAMPLETOKENFORTESTINGONLY1234567890' AND user = '{request.args.get('u')}'")
+"""
+    sql_findings, _ = _scan_snippet(code, tmp_path)
+    assert len(sql_findings) == 1
+    # Evidence must NOT expose the raw token
+    assert "ghp_EXAMPLETOKENFORTESTINGONLY1234567890" not in sql_findings[0].evidence
+    assert "[REDACTED" in sql_findings[0].evidence
+
+
+def test_cli_disable_case_insensitive_flag(cli_runner: CliRunner, tmp_path: Path):
+    """CLI --disable flag is case-insensitive for SAST rules."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = repo / "app.py"
+    target.write_text(
+        "def h(request): cursor.execute(f'SELECT * FROM u WHERE id = {request.args[\"id\"]}')",
+        encoding="utf-8",
+    )
+
+    result = cli_runner.invoke(app, ["scan", str(repo), "--disable", "sast001"])
+    assert "SAST001" not in result.output

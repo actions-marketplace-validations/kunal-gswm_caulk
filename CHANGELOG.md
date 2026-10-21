@@ -54,6 +54,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Test Suite Expansion:**
   - Added 25 comprehensive unit and integration tests (`tests/test_history.py` and `tests/test_action.py`) covering all Git topologies (initial commit, deleted secrets, replaced secrets, merge commits, tags, orphan branches, duplicate blobs, oversized blobs, corrupt objects, shallow clone rejection, and secret redaction).
 
+### Changed & Fixed
+- **Python SAST Precision, Scope Handling & Robustness Hardening:**
+  - **Exception Dataflow:** Fixed `ast.Try` taint propagation so reachable taints from `try`, `except`, and `else` blocks conservatively flow into `finalbody` rather than resetting to the pre-try state.
+  - **Same-Line Sinks:** Replaced line-based deduplication with `(lineno, col_offset)` tracking and distinct fingerprints so multiple sinks on the same source line are all captured.
+  - **False-Positive Elimination on `.raw()`:** Enforced database receiver tokens and SQL command keywords on `.raw()` methods, eliminating false positives on non-database methods such as `camera.raw(user_input)`.
+  - **Refined Database Receivers:** Replaced generic `"client"` substring matching with specific `"db_client"` and `"sql_client"`, preventing false positives on HTTP/API client methods without SQL keywords.
+  - **Walrus & Ternary Expressions:** Added taint propagation and variable assignment tracking for walrus operators (`ast.NamedExpr`) and ternary expressions (`ast.IfExp`).
+  - **Loop Target Unpacking:** Supported tuple/list target unpacking in `for` and `async for` loops (`for k, v in request.form.items():`), propagating taint to all unpacked target names.
+  - **Expanded Sources & Collection Methods:** Added `.getlist()`, `.keys()`, `.values()`, `.items()`, `.pop()`, `.popitem()`, `.setdefault()`, and Django `request.body` / `request.FILES` / `request.META` to taint sources.
+  - **Branch Import Preservation:** Propagated module and function aliases declared inside `if` and `try` statements to the enclosing function/module scope.
+  - **Multiline Evidence Formatting:** Replaced partial first-line excerpts with AST unparsed, whitespace-normalized snippets bounded to 120 characters with secret redaction.
+  - **Case-Insensitive CLI Rule Disabling:** Normalized `--disable` arguments to uppercase so `--disable sast001` cleanly disables `SAST001`.
+  - **Recursion Safety:** Safely handled `RecursionError` in `ScanContext.get_ast()` and `PythonASTSecurityAnalyzer.analyze()` on pathologically nested expressions without crashing scans.
+
 ---
 
 ## [0.2.0] - 2026-10-21

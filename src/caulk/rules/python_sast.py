@@ -14,7 +14,7 @@ import ast
 import re
 
 from caulk.discovery import DiscoveredFile
-from caulk.models import Confidence, Finding, FindingCategory, Severity
+from caulk.models import Confidence, Finding, FindingCategory, Severity, compute_fingerprint
 from caulk.redaction import sanitize_evidence
 from caulk.rules.base import Rule, ScanContext
 
@@ -39,6 +39,20 @@ REQUEST_ATTRIBUTES: set[str] = {
     "POST",
     "COOKIES",
     "headers",
+    "body",
+    "files",
+    "FILES",
+    "META",
+    "params",
+}
+
+STRONG_DB_RECEIVERS: set[str] = {
+    "cursor",
+    "cur",
+    "conn",
+    "connection",
+    "db",
+    "database",
 }
 
 DB_RECEIVER_SUBSTRINGS: set[str] = {
@@ -47,11 +61,13 @@ DB_RECEIVER_SUBSTRINGS: set[str] = {
     "conn",
     "connection",
     "db",
+    "database",
     "session",
     "engine",
-    "client",
-    "database",
     "models",
+    "objects",
+    "db_client",
+    "sql_client",
 }
 
 SQL_KEYWORDS: set[str] = {
@@ -68,6 +84,14 @@ SQL_KEYWORDS: set[str] = {
     "GRANT",
     "REVOKE",
     "UNION",
+    "PRAGMA",
+    "EXEC",
+    "EXECUTE",
+    "CALL",
+    "SHOW",
+    "DESCRIBE",
+    "EXPLAIN",
+    "USE",
 }
 
 ALWAYS_SHELL_SINKS: set[tuple[str, str]] = {
@@ -123,6 +147,17 @@ def _is_argv_node(node: ast.AST, argv_names: set[str], module_aliases: dict[str,
     return False
 
 
+def _extract_target_names(target: ast.AST) -> list[str]:
+    """Recursively collect variable names from assignment or loop targets."""
+    names: list[str] = []
+    if isinstance(target, ast.Name):
+        names.append(target.id)
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        for elt in target.elts:
+            names.extend(_extract_target_names(elt))
+    return names
+
+
 def is_taint_source(
     node: ast.AST | None,
     request_names: set[str],
@@ -153,8 +188,17 @@ def is_taint_source(
         ):
             return True
 
-        # Method call .get(...) on a request attribute or on request.get_json()
-        if isinstance(node.func, ast.Attribute) and node.func.attr == "get":
+        # Method calls on request attributes or request.get_json()
+        if isinstance(node.func, ast.Attribute) and node.func.attr in (
+            "get",
+            "getlist",
+            "keys",
+            "values",
+            "items",
+            "pop",
+            "popitem",
+            "setdefault",
+        ):
             receiver = node.func.value
             if _is_request_attr(receiver, request_names):
                 return True
@@ -170,7 +214,7 @@ def is_taint_source(
         if is_taint_source(node.value, request_names, argv_names, module_aliases):
             return True
 
-    # 3. Direct request attributes: request.args, request.form, request.data, etc.
+    # 3. Direct request attributes: request.args, request.form, request.data, request.body, etc.
     if _is_request_attr(node, request_names):
         return True
 
@@ -196,6 +240,24 @@ def is_expr_tainted(
     # Variable lookup
     if isinstance(expr, ast.Name):
         return expr.id in tainted_vars
+
+    # Walrus / NamedExpr: (x := expr)
+    if isinstance(expr, ast.NamedExpr):
+        tainted = is_expr_tainted(
+            expr.value, tainted_vars, request_names, argv_names, module_aliases
+        )
+        if isinstance(expr.target, ast.Name):
+            if tainted:
+                tainted_vars.add(expr.target.id)
+            else:
+                tainted_vars.discard(expr.target.id)
+        return tainted
+
+    # Ternary / IfExp: body if test else orelse
+    if isinstance(expr, ast.IfExp):
+        return is_expr_tainted(
+            expr.body, tainted_vars, request_names, argv_names, module_aliases
+        ) or is_expr_tainted(expr.orelse, tainted_vars, request_names, argv_names, module_aliases)
 
     # f-string: ast.JoinedStr
     if isinstance(expr, ast.JoinedStr):
@@ -234,7 +296,7 @@ def is_expr_tainted(
                 )
             return False
 
-    # Method calls: .format(...) or string transformation methods
+    # Method calls: .format(...), string methods, or collection methods on tainted objects
     if isinstance(expr, ast.Call):
         if isinstance(expr.func, ast.Attribute):
             attr = expr.func.attr
@@ -268,6 +330,11 @@ def is_expr_tainted(
                     )
                 ):
                     return True
+            elif attr in ("get", "getlist", "pop"):
+                if is_expr_tainted(
+                    expr.func.value, tainted_vars, request_names, argv_names, module_aliases
+                ):
+                    return True
 
         # str(x) call
         if (
@@ -289,6 +356,27 @@ def is_expr_tainted(
         return any(
             is_expr_tainted(elt, tainted_vars, request_names, argv_names, module_aliases)
             for elt in expr.elts
+        )
+
+    # Sets: {x}
+    if isinstance(expr, ast.Set):
+        return any(
+            is_expr_tainted(elt, tainted_vars, request_names, argv_names, module_aliases)
+            for elt in expr.elts
+        )
+
+    # Dicts: {"key": x}
+    if isinstance(expr, ast.Dict):
+        return any(
+            (
+                k is not None
+                and is_expr_tainted(k, tainted_vars, request_names, argv_names, module_aliases)
+            )
+            or (
+                v is not None
+                and is_expr_tainted(v, tainted_vars, request_names, argv_names, module_aliases)
+            )
+            for k, v in zip(expr.keys, expr.values, strict=False)
         )
 
     return False
@@ -317,6 +405,10 @@ def extract_literal_strings(
         if isinstance(expr.func, ast.Attribute) and expr.func.attr == "format":
             return extract_literal_strings(expr.func.value, assigned_literals)
         return []
+    if isinstance(expr, ast.IfExp):
+        return extract_literal_strings(expr.body, assigned_literals) + extract_literal_strings(
+            expr.orelse, assigned_literals
+        )
     if isinstance(expr, ast.Name):
         return list(assigned_literals.get(expr.id, []))
     return []
@@ -338,8 +430,8 @@ class PythonASTSecurityAnalyzer:
         self.lines = context.get_lines(file)
         self.sql_findings: list[Finding] = []
         self.shell_findings: list[Finding] = []
-        self._seen_sql_lines: set[int] = set()
-        self._seen_shell_lines: set[int] = set()
+        self._seen_sql_calls: set[tuple[int, int]] = set()
+        self._seen_shell_calls: set[tuple[int, int]] = set()
 
     def analyze(self, tree: ast.AST) -> tuple[list[Finding], list[Finding]]:
         """Run AST security analysis across the given syntax tree."""
@@ -348,16 +440,20 @@ class PythonASTSecurityAnalyzer:
         request_names = set(DEFAULT_REQUEST_NAMES)
         argv_names = set(DEFAULT_ARGV_NAMES)
 
-        if isinstance(tree, ast.Module):
-            self._analyze_statements(
-                tree.body,
-                tainted_vars=set(),
-                assigned_literals={},
-                module_aliases=module_aliases,
-                function_aliases=function_aliases,
-                request_names=request_names,
-                argv_names=argv_names,
-            )
+        try:
+            if isinstance(tree, ast.Module):
+                self._analyze_statements(
+                    tree.body,
+                    tainted_vars=set(),
+                    assigned_literals={},
+                    module_aliases=module_aliases,
+                    function_aliases=function_aliases,
+                    request_names=request_names,
+                    argv_names=argv_names,
+                )
+        except RecursionError:
+            # Safely handle pathological AST nesting depth
+            pass
 
         return self.sql_findings, self.shell_findings
 
@@ -427,7 +523,7 @@ class PythonASTSecurityAnalyzer:
 
             # 4. Conditional branches: if / else
             if isinstance(stmt, ast.If):
-                # Check sinks in condition
+                # Check sinks and walrus in condition
                 self._check_calls_in_node(
                     stmt.test,
                     tainted_vars,
@@ -444,10 +540,10 @@ class PythonASTSecurityAnalyzer:
                     stmt.body,
                     t_body,
                     lit_body,
-                    dict(module_aliases),
-                    dict(function_aliases),
-                    set(request_names),
-                    set(argv_names),
+                    module_aliases,
+                    function_aliases,
+                    request_names,
+                    argv_names,
                 )
 
                 t_orelse = set(tainted_vars)
@@ -457,10 +553,10 @@ class PythonASTSecurityAnalyzer:
                         stmt.orelse,
                         t_orelse,
                         lit_orelse,
-                        dict(module_aliases),
-                        dict(function_aliases),
-                        set(request_names),
-                        set(argv_names),
+                        module_aliases,
+                        function_aliases,
+                        request_names,
+                        argv_names,
                     )
 
                 tainted_vars.clear()
@@ -477,13 +573,15 @@ class PythonASTSecurityAnalyzer:
                     stmt.body,
                     t_body,
                     lit_body,
-                    dict(module_aliases),
-                    dict(function_aliases),
-                    set(request_names),
-                    set(argv_names),
+                    module_aliases,
+                    function_aliases,
+                    request_names,
+                    argv_names,
                 )
 
-                handler_taints = [t_body]
+                branch_taints: list[set[str]] = [t_body]
+                branch_lits: list[dict[str, list[str]]] = [lit_body]
+
                 for handler in stmt.handlers:
                     t_h = set(tainted_vars)
                     lit_h = dict(assigned_literals)
@@ -491,73 +589,86 @@ class PythonASTSecurityAnalyzer:
                         handler.body,
                         t_h,
                         lit_h,
-                        dict(module_aliases),
-                        dict(function_aliases),
-                        set(request_names),
-                        set(argv_names),
+                        module_aliases,
+                        function_aliases,
+                        request_names,
+                        argv_names,
                     )
-                    handler_taints.append(t_h)
+                    branch_taints.append(t_h)
+                    branch_lits.append(lit_h)
 
                 if stmt.orelse:
                     t_o = set(t_body)
-                    lit_o = dict(assigned_literals)
+                    lit_o = dict(lit_body)
                     self._analyze_statements(
                         stmt.orelse,
                         t_o,
                         lit_o,
-                        dict(module_aliases),
-                        dict(function_aliases),
-                        set(request_names),
-                        set(argv_names),
+                        module_aliases,
+                        function_aliases,
+                        request_names,
+                        argv_names,
                     )
-                    handler_taints.append(t_o)
+                    branch_taints.append(t_o)
+                    branch_lits.append(lit_o)
+
+                pre_final_taints: set[str] = set()
+                for bt in branch_taints:
+                    pre_final_taints |= bt
+
+                pre_final_lits: dict[str, list[str]] = dict(assigned_literals)
+                for bl in branch_lits:
+                    pre_final_lits.update(bl)
 
                 if stmt.finalbody:
-                    t_f = set(tainted_vars)
-                    lit_f = dict(assigned_literals)
+                    t_f = set(pre_final_taints)
+                    lit_f = dict(pre_final_lits)
                     self._analyze_statements(
                         stmt.finalbody,
                         t_f,
                         lit_f,
-                        dict(module_aliases),
-                        dict(function_aliases),
-                        set(request_names),
-                        set(argv_names),
+                        module_aliases,
+                        function_aliases,
+                        request_names,
+                        argv_names,
                     )
-                    handler_taints.append(t_f)
-
-                merged_taint: set[str] = set()
-                for ht in handler_taints:
-                    merged_taint |= ht
-                tainted_vars.clear()
-                tainted_vars.update(merged_taint)
+                    tainted_vars.clear()
+                    tainted_vars.update(t_f)
+                    assigned_literals.clear()
+                    assigned_literals.update(lit_f)
+                else:
+                    tainted_vars.clear()
+                    tainted_vars.update(pre_final_taints)
+                    assigned_literals.clear()
+                    assigned_literals.update(pre_final_lits)
                 continue
 
             # 6. Loops: for / while
             if isinstance(stmt, (ast.For, ast.AsyncFor)):
                 if is_expr_tainted(
                     stmt.iter, tainted_vars, request_names, argv_names, module_aliases
-                ) and isinstance(stmt.target, ast.Name):
-                    tainted_vars.add(stmt.target.id)
+                ):
+                    for name in _extract_target_names(stmt.target):
+                        tainted_vars.add(name)
 
                 self._analyze_statements(
                     stmt.body,
                     tainted_vars,
                     assigned_literals,
-                    dict(module_aliases),
-                    dict(function_aliases),
-                    set(request_names),
-                    set(argv_names),
+                    module_aliases,
+                    function_aliases,
+                    request_names,
+                    argv_names,
                 )
                 if stmt.orelse:
                     self._analyze_statements(
                         stmt.orelse,
                         tainted_vars,
                         assigned_literals,
-                        dict(module_aliases),
-                        dict(function_aliases),
-                        set(request_names),
-                        set(argv_names),
+                        module_aliases,
+                        function_aliases,
+                        request_names,
+                        argv_names,
                     )
                 continue
 
@@ -575,46 +686,43 @@ class PythonASTSecurityAnalyzer:
                     stmt.body,
                     tainted_vars,
                     assigned_literals,
-                    dict(module_aliases),
-                    dict(function_aliases),
-                    set(request_names),
-                    set(argv_names),
+                    module_aliases,
+                    function_aliases,
+                    request_names,
+                    argv_names,
                 )
                 if stmt.orelse:
                     self._analyze_statements(
                         stmt.orelse,
                         tainted_vars,
                         assigned_literals,
-                        dict(module_aliases),
-                        dict(function_aliases),
-                        set(request_names),
-                        set(argv_names),
+                        module_aliases,
+                        function_aliases,
+                        request_names,
+                        argv_names,
                     )
                 continue
 
             # 7. With statements
             if isinstance(stmt, (ast.With, ast.AsyncWith)):
                 for item in stmt.items:
-                    if (
-                        item.optional_vars
-                        and isinstance(item.optional_vars, ast.Name)
-                        and is_expr_tainted(
-                            item.context_expr,
-                            tainted_vars,
-                            request_names,
-                            argv_names,
-                            module_aliases,
-                        )
+                    if item.optional_vars and is_expr_tainted(
+                        item.context_expr,
+                        tainted_vars,
+                        request_names,
+                        argv_names,
+                        module_aliases,
                     ):
-                        tainted_vars.add(item.optional_vars.id)
+                        for name in _extract_target_names(item.optional_vars):
+                            tainted_vars.add(name)
                 self._analyze_statements(
                     stmt.body,
                     tainted_vars,
                     assigned_literals,
-                    dict(module_aliases),
-                    dict(function_aliases),
-                    set(request_names),
-                    set(argv_names),
+                    module_aliases,
+                    function_aliases,
+                    request_names,
+                    argv_names,
                 )
                 continue
 
@@ -712,6 +820,17 @@ class PythonASTSecurityAnalyzer:
                         tainted_vars.discard(elt.id)
                     assigned_literals[elt.id] = literals
 
+    def _collect_named_exprs(self, node: ast.AST) -> list[ast.NamedExpr]:
+        """Collect all ast.NamedExpr nodes not inside nested functions/classes."""
+        named_exprs: list[ast.NamedExpr] = []
+        if isinstance(node, ast.NamedExpr):
+            named_exprs.append(node)
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            named_exprs.extend(self._collect_named_exprs(child))
+        return named_exprs
+
     def _check_calls_in_node(
         self,
         node: ast.AST,
@@ -722,7 +841,15 @@ class PythonASTSecurityAnalyzer:
         request_names: set[str],
         argv_names: set[str],
     ) -> None:
-        """Find and evaluate all Call nodes within an AST subtree."""
+        """Find and evaluate all Call nodes and NamedExpr nodes within an AST subtree."""
+        for named in self._collect_named_exprs(node):
+            if isinstance(named.target, ast.Name):
+                is_t = is_expr_tainted(
+                    named.value, tainted_vars, request_names, argv_names, module_aliases
+                )
+                lits = extract_literal_strings(named.value, assigned_literals)
+                self._assign_target(named.target, is_t, lits, tainted_vars, assigned_literals)
+
         calls = self._collect_calls(node)
         for call in calls:
             # 1. SQL Injection check
@@ -747,11 +874,11 @@ class PythonASTSecurityAnalyzer:
     def _collect_calls(self, node: ast.AST) -> list[ast.Call]:
         """Collect all ast.Call nodes that are not inside nested functions/classes."""
         calls: list[ast.Call] = []
+        if isinstance(node, ast.Call):
+            calls.append(node)
         for child in ast.iter_child_nodes(node):
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 continue
-            if isinstance(child, ast.Call):
-                calls.append(child)
             calls.extend(self._collect_calls(child))
         return calls
 
@@ -778,7 +905,7 @@ class PythonASTSecurityAnalyzer:
             query_arg = call.args[0]
         elif call.keywords:
             for kw in call.keywords:
-                if kw.arg in ("operation", "query", "sql"):
+                if kw.arg in ("operation", "query", "sql", "statement", "raw_query", "stmt"):
                     query_arg = kw.value
                     break
 
@@ -786,34 +913,45 @@ class PythonASTSecurityAnalyzer:
             return
 
         # Check receiver & query keyword false-positive controls
-        if method in ("execute", "executemany"):
-            try:
-                receiver_str = ast.unparse(call.func.value).lower()
-            except Exception:
-                receiver_str = ""
+        try:
+            receiver_str = ast.unparse(call.func.value).lower()
+        except Exception:
+            receiver_str = ""
 
-            tokens = set(re.split(r"[._]", receiver_str))
-            is_db_receiver = bool(tokens & DB_RECEIVER_SUBSTRINGS)
+        tokens = set(re.split(r"[._]", receiver_str))
 
-            query_literals = extract_literal_strings(query_arg, assigned_literals)
-            combined_text = " ".join(query_literals).upper()
-            has_sql_keyword = any(
-                re.search(r"\b" + kw + r"\b", combined_text) for kw in SQL_KEYWORDS
-            )
+        query_literals = extract_literal_strings(query_arg, assigned_literals)
+        combined_text = " ".join(query_literals).upper()
+        has_sql_keyword = any(re.search(r"\b" + kw + r"\b", combined_text) for kw in SQL_KEYWORDS)
 
-            if not is_db_receiver and not has_sql_keyword:
-                return
+        if has_sql_keyword:
+            # Explicit SQL keyword present (e.g. SELECT, INSERT, etc.)
+            pass
+        elif not query_literals and bool(tokens & STRONG_DB_RECEIVERS):
+            # Dynamic query variable without literal strings, passed to strong DB receiver
+            pass
+        else:
+            # Query has literal strings without SQL keywords, or query has no literals
+            # and receiver is not a strong DB receiver.
+            return
 
         # Parameterized queries have constant query string in query_arg -> not tainted
         if not is_expr_tainted(query_arg, tainted_vars, request_names, argv_names, module_aliases):
             return
 
-        lineno = call.lineno
-        if lineno in self._seen_sql_lines:
+        col_offset = getattr(call, "col_offset", 0)
+        call_key = (call.lineno, col_offset)
+        if call_key in self._seen_sql_calls:
             return
-        self._seen_sql_lines.add(lineno)
+        self._seen_sql_calls.add(call_key)
 
         evidence = self._format_evidence(call)
+        fp = compute_fingerprint(
+            rule_id="SAST001",
+            file_path=self.file.rel_path,
+            line_number=call.lineno,
+            identity_hint=f"col:{col_offset}",
+        )
         finding = Finding(
             rule_id="SAST001",
             title="Python SQL Injection",
@@ -824,7 +962,7 @@ class PythonASTSecurityAnalyzer:
             confidence=Confidence.HIGH,
             category=FindingCategory.SAST,
             file_path=self.file.rel_path,
-            line_number=lineno,
+            line_number=call.lineno,
             evidence=evidence,
             impact=(
                 "An attacker can manipulate SQL queries to bypass authentication, read or modify sensitive database records, or execute administrative operations."
@@ -836,6 +974,7 @@ class PythonASTSecurityAnalyzer:
                 "https://cwe.mitre.org/data/definitions/89.html",
                 "https://owasp.org/www-community/attacks/SQL_Injection",
             ],
+            fingerprint=fp,
             detected_by="caulk-engine",
         )
         self.sql_findings.append(finding)
@@ -905,12 +1044,19 @@ class PythonASTSecurityAnalyzer:
         if not is_expr_tainted(cmd_arg, tainted_vars, request_names, argv_names, module_aliases):
             return
 
-        lineno = call.lineno
-        if lineno in self._seen_shell_lines:
+        col_offset = getattr(call, "col_offset", 0)
+        call_key = (call.lineno, col_offset)
+        if call_key in self._seen_shell_calls:
             return
-        self._seen_shell_lines.add(lineno)
+        self._seen_shell_calls.add(call_key)
 
         evidence = self._format_evidence(call)
+        fp = compute_fingerprint(
+            rule_id="SAST002",
+            file_path=self.file.rel_path,
+            line_number=call.lineno,
+            identity_hint=f"col:{col_offset}",
+        )
         finding = Finding(
             rule_id="SAST002",
             title="Command Injection via Shell Execution",
@@ -921,7 +1067,7 @@ class PythonASTSecurityAnalyzer:
             confidence=Confidence.HIGH,
             category=FindingCategory.SAST,
             file_path=self.file.rel_path,
-            line_number=lineno,
+            line_number=call.lineno,
             evidence=evidence,
             impact=(
                 "An attacker can inject arbitrary shell commands leading to complete host compromise, unauthorized file access, or lateral movement."
@@ -933,24 +1079,33 @@ class PythonASTSecurityAnalyzer:
                 "https://cwe.mitre.org/data/definitions/78.html",
                 "https://owasp.org/www-community/attacks/Command_Injection",
             ],
+            fingerprint=fp,
             detected_by="caulk-engine",
         )
         self.shell_findings.append(finding)
 
     def _format_evidence(self, call: ast.Call) -> str:
         """Create bounded, safe evidence snippet for finding reporting."""
-        if 0 < call.lineno <= len(self.lines):
-            raw_line = self.lines[call.lineno - 1].strip()
-        else:
-            try:
-                raw_line = ast.unparse(call).strip()
-            except Exception:
-                raw_line = "sink_call(...)"
+        raw_snippet = ""
+        try:
+            unparsed = ast.unparse(call)
+            raw_snippet = " ".join(unparsed.split())
+        except Exception:
+            pass
 
-        if len(raw_line) > 120:
-            raw_line = raw_line[:117] + "..."
+        if not raw_snippet:
+            if 0 < call.lineno <= len(self.lines):
+                end_lineno = getattr(call, "end_lineno", call.lineno) or call.lineno
+                max_lines = min(end_lineno, call.lineno + 2)
+                snippet_lines = [self.lines[i].strip() for i in range(call.lineno - 1, max_lines)]
+                raw_snippet = " ".join(snippet_lines)
+            else:
+                raw_snippet = "sink_call(...)"
 
-        return sanitize_evidence(raw_line)
+        if len(raw_snippet) > 120:
+            raw_snippet = raw_snippet[:117] + "..."
+
+        return sanitize_evidence(raw_snippet)
 
 
 def run_sast_analysis(
@@ -958,7 +1113,8 @@ def run_sast_analysis(
 ) -> tuple[list[Finding], list[Finding]]:
     """Execute SAST analysis on a file, caching results in ScanContext for efficiency."""
     if file.path in context._sast_cache:
-        return context._sast_cache[file.path]
+        sql, shell = context._sast_cache[file.path]
+        return list(sql), list(shell)
 
     tree = context.get_ast(file)
     if tree is None:
@@ -967,8 +1123,8 @@ def run_sast_analysis(
 
     analyzer = PythonASTSecurityAnalyzer(file, context)
     sql_findings, shell_findings = analyzer.analyze(tree)
-    context._sast_cache[file.path] = (sql_findings, shell_findings)
-    return (sql_findings, shell_findings)
+    context._sast_cache[file.path] = (list(sql_findings), list(shell_findings))
+    return list(sql_findings), list(shell_findings)
 
 
 class SQLInjectionRule(Rule):
@@ -993,7 +1149,7 @@ class SQLInjectionRule(Rule):
 
     def scan_file(self, file: DiscoveredFile, context: ScanContext) -> list[Finding]:
         sql_findings, _ = run_sast_analysis(file, context)
-        return sql_findings
+        return list(sql_findings)
 
 
 class ShellCommandInjectionRule(Rule):
@@ -1016,4 +1172,4 @@ class ShellCommandInjectionRule(Rule):
 
     def scan_file(self, file: DiscoveredFile, context: ScanContext) -> list[Finding]:
         _, shell_findings = run_sast_analysis(file, context)
-        return shell_findings
+        return list(shell_findings)

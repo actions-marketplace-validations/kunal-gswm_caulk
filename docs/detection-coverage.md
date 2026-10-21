@@ -54,6 +54,22 @@ Caulk implements deterministic AST-based static analysis with intraprocedural ta
 | `SAST001` | Python SQL Injection | `HIGH` | `HIGH` | `*.py` | Detects unsanitized dynamic values (from Flask/Django requests, `input()`, `sys.argv`) formatted via f-strings, concatenation (`+`), `%` formatting, or `.format()` and executed by database sinks (`cursor.execute()`, `.executemany()`, `.executescript()`, `.raw()`). Parameterized queries (`%s`, `?`, `:param`) and static queries are not flagged. |
 | `SAST002` | Command Injection via Shell Execution | `HIGH` | `HIGH` | `*.py` | Detects dynamic untrusted values passed to always-shell sinks (`os.system()`, `os.popen()`, `subprocess.getoutput()`, `subprocess.getstatusoutput()`) or subprocess calls with `shell=True` (`subprocess.run()`, `Popen()`, `call()`, `check_call()`, `check_output()`). Resolves import aliases. Safe argument lists without `shell=True` are not flagged. |
 
+#### Taint Tracking and Dataflow Model
+- **Sources Tracked:** `input()`, `builtins.input()`, `sys.argv` / `argv[...]`, Flask request objects (`request.args`, `request.form`, `request.values`, `request.json`, `request.data`, `request.get_json()`, `request.headers`, `request.cookies`), and Django request objects (`request.GET`, `request.POST`, `request.COOKIES`, `request.body`, `request.FILES`, `request.META`).
+- **Collection Methods:** Tracks taint across collection lookups including `.get()`, `.getlist()`, `.keys()`, `.values()`, `.items()`, `.pop()`, and dictionary subscripting (`req['field']`).
+- **Expression Constructs:** Supports f-strings (`JoinedStr`), binary formatting (`+`, `%`), method formatting (`.format()`), string transformations (`strip`, `upper`, `lower`, `replace`, `join`), ternary expressions (`IfExp`), and walrus operators (`NamedExpr`).
+- **Control Flow & Scopes:** Conservative branch merging across `if/else`, `for/while` loops (including tuple unpacking targets `for k, v in ...`), and `try/except/finally` exception handlers. Function definitions and class definitions maintain strict scope isolation. Module and function import aliases are tracked intraprocedurally.
+
+#### Receiver and Sink Heuristics
+- **Database Sinks:** Methods `execute`, `executemany`, `executescript`, and `raw` are evaluated with false-positive controls. Sinks executing queries containing explicit SQL command keywords (`SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DROP`, `CREATE`, `ALTER`, `REPLACE`, `TRUNCATE`, `MERGE`, `GRANT`, `REVOKE`, `UNION`, `PRAGMA`, `EXEC`, `EXECUTE`, `CALL`, etc.) are detected regardless of receiver name. Dynamic query variables without literal segments require verified database handles (`cursor`, `cur`, `conn`, `connection`, `db`, `database`). Unrelated objects (e.g. `camera.raw`, `http_client.execute`, `task_runner.execute`) without SQL keywords are cleanly excluded.
+- **Shell Sinks:** Subprocess sinks require statically truthy `shell=True` (or always-shell wrappers like `os.system`). Ordinary subprocess invocations passing argument lists without `shell=True` are recognized as safe and are not flagged.
+- **Multiple Sinks & Formatting:** Multiple sink invocations on a single source line are deduplicated by `(lineno, col_offset)` with distinct deterministic fingerprints. Multiline sink calls report single-line reconstructed call expressions bounded to 120 characters with automatic secret redaction.
+
+#### Explicit Analysis Limitations
+- **Intraprocedural Scope:** Analysis operates intraprocedurally within individual files and function scopes. Taint across complex inter-module call graphs, dynamically dispatched methods, or class inheritance hierarchies is not tracked.
+- **Dynamic Reflection:** Taint originating from or passed through `getattr()`, `setattr()`, `eval()`, `exec()`, or custom C-extension functions is outside the scope of AST static inspection.
+- **Recursion Safety:** Pathological AST nesting depth exceeding Python runtime limits is safely caught and bounded without crashing scans of other files.
+
 ---
 
 ## 2. Planned Checks (Future Milestones)

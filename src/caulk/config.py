@@ -164,7 +164,7 @@ class CaulkConfig:
         disabled = rules_data.get("disabled", [])
         if not isinstance(disabled, list):
             raise ValueError("rules.disabled must be a list of rule ID strings")
-        disabled_set = {str(r).strip() for r in disabled if str(r).strip()}
+        disabled_set = {str(r).strip().upper() for r in disabled if str(r).strip()}
 
         return cls(
             fail_threshold=threshold,

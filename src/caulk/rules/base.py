@@ -60,7 +60,7 @@ class ScanContext:
         text = self.read_text(file)
         try:
             tree = ast.parse(text, filename=str(file.path))
-        except (SyntaxError, ValueError, TypeError):
+        except (SyntaxError, ValueError, TypeError, RecursionError):
             tree = None
 
         self._ast_cache[file.path] = tree

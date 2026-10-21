@@ -201,7 +201,7 @@ def scan_command(
         caulk_config.exclude_patterns.extend(exclude)
 
     if disable:
-        caulk_config.disabled_rules.update(disable)
+        caulk_config.disabled_rules.update(d.strip().upper() for d in disable if d.strip())
 
     cat_filter: list[FindingCategory] | None = None
     if category:
