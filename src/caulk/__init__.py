@@ -1,6 +1,6 @@
 """Caulk: Deterministic, open-source security checker for modern application repositories."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Caulk Contributors"
 
 from caulk.models import Confidence, Finding, FindingCategory, FindingStatus, Severity

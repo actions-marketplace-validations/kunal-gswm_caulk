@@ -162,7 +162,7 @@ class OSVAdvisoryProvider(AdvisoryProvider):
                 data=payload_data,
                 headers={
                     "Content-Type": "application/json",
-                    "User-Agent": "Caulk-Security-Checker/0.1.0",
+                    "User-Agent": "Caulk-Security-Checker/0.2.0",
                 },
                 method="POST",
             )

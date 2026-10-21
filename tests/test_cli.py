@@ -26,7 +26,7 @@ def test_cli_help(cli_runner: CliRunner):
 def test_cli_version(cli_runner: CliRunner):
     result = cli_runner.invoke(app, ["--version"])
     assert result.exit_code == EXIT_SUCCESS_CLEAN
-    assert "caulk-security v0.1.0" in result.output
+    assert "caulk-security v0.2.0" in result.output
 
 
 def test_distribution_console_scripts():
@@ -82,7 +82,7 @@ def test_cli_scan_format_json(cli_runner: CliRunner, fixtures_dir: Path):
     result = cli_runner.invoke(app, ["scan", str(clean_dir), "--format", "json"])
     assert result.exit_code == EXIT_SUCCESS_CLEAN
     parsed = json.loads(result.output)
-    assert parsed["caulk_version"] == "0.1.0"
+    assert parsed["caulk_version"] == "0.2.0"
     assert "findings" in parsed
     assert "summary" in parsed
 
@@ -94,7 +94,7 @@ def test_cli_scan_output_file(cli_runner: CliRunner, fixtures_dir: Path, tmp_pat
     assert result.exit_code == EXIT_SUCCESS_CLEAN
     assert out_file.exists()
     parsed = json.loads(out_file.read_text(encoding="utf-8"))
-    assert parsed["caulk_version"] == "0.1.0"
+    assert parsed["caulk_version"] == "0.2.0"
 
 
 def test_cli_rules_list(cli_runner: CliRunner):
@@ -148,7 +148,7 @@ def test_executable_invocation(tmp_path: Path):
     # 1. Test --version
     res_version = subprocess.run([exe, "--version"], capture_output=True, text=True, check=False)
     assert res_version.returncode == 0
-    assert "caulk-security v0.1.0" in res_version.stdout
+    assert "caulk-security v0.2.0" in res_version.stdout
 
     # 2. Test --help
     res_help = subprocess.run([exe, "--help"], capture_output=True, text=True, check=False)

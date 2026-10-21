@@ -81,20 +81,19 @@ def validate_action_inputs(
     # 3. Advisory check flag
     check_vulns = parse_action_boolean(raw_check_vulns, "check-vulns")
 
-    # 4. Python version input validation
+    # 4. Python version input validation (restricted to tested series: 3.11, 3.12, 3.13)
     if raw_python_version:
         v_str = raw_python_version.strip()
-        clean_v = v_str.removeprefix(">=").strip()
-        parts = clean_v.split(".")
+        parts = v_str.split(".")
         if not parts or not parts[0].isdigit() or (len(parts) > 1 and not parts[1].isdigit()):
             raise ValueError(
-                f"Invalid python-version '{raw_python_version}'. Caulk requires Python 3.11 or newer."
+                f"Invalid python-version '{raw_python_version}'. Supported versions: 3.11, 3.12, 3.13."
             )
         major = int(parts[0])
         minor = int(parts[1]) if len(parts) > 1 else 0
-        if (major, minor) < (3, 11):
+        if (major, minor) not in {(3, 11), (3, 12), (3, 13)}:
             raise ValueError(
-                f"Unsupported Python version '{raw_python_version}'. Caulk requires Python 3.11 or newer."
+                f"Unsupported Python version '{raw_python_version}'. Caulk is tested and supported exclusively on Python 3.11, 3.12, and 3.13."
             )
 
     if sys.version_info < (3, 11):  # noqa: UP036

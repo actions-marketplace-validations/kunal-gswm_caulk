@@ -146,7 +146,7 @@ Generates a starter `.caulk.toml` configuration file with safe default exclusion
 ## 5. Sample Output
 
 ```
-╭─────────────────────────────────── CAULK v0.1.0 ───────────────────────────────────╮
+╭─────────────────────────────────── CAULK v0.2.0 ───────────────────────────────────╮
 │ Scanning target: E:/my-project                                                     │
 ╰────────────────────────────────────────────────────────────────────────────────────╯
 Files inspected: 42  Files skipped: 8  Ecosystems: python, docker  Duration: 0.12s
@@ -292,8 +292,8 @@ jobs:
           persist-credentials: false
 
       - name: Run Caulk Security Checker
-        # Note: Use @main or an immutable commit SHA until an official release tag is published
-        uses: kunal-gswm/caulk@main
+        # Note: Pin to an official release tag (e.g. @v0.2.0) or an immutable commit SHA
+        uses: kunal-gswm/caulk@v0.2.0
         with:
           path: .
           severity-threshold: HIGH
@@ -323,7 +323,7 @@ jobs:
 ```yaml
       - name: Run Caulk
         id: caulk
-        uses: kunal-gswm/caulk@main
+        uses: kunal-gswm/caulk@v0.2.0
         continue-on-error: true
 
       - name: Upload Report Artifact

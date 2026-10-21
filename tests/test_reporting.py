@@ -19,7 +19,7 @@ def test_terminal_report_clean():
     test_console = Console(file=output, color_system=None, width=120)
 
     result = ScanResult(
-        caulk_version="0.1.0",
+        caulk_version="0.2.0",
         target_path="/test/clean",
         findings=[],
         summary=ScanSummary(files_scanned=5, files_skipped=1, total_findings=0),
@@ -28,7 +28,7 @@ def test_terminal_report_clean():
     render_terminal_report(result, console=test_console)
     text = output.getvalue()
 
-    assert "CAULK v0.1.0" in text
+    assert "CAULK v0.2.0" in text
     assert "Scan Clean" in text
     assert "A clean scan does not prove an application is secure" in text
 
@@ -44,7 +44,7 @@ def test_terminal_report_with_findings(sample_finding: Finding):
         severity_counts={Severity.CRITICAL.value: 1},
     )
     result = ScanResult(
-        caulk_version="0.1.0",
+        caulk_version="0.2.0",
         target_path="/test/app",
         findings=[sample_finding],
         summary=summary,
@@ -65,7 +65,7 @@ def test_terminal_report_with_findings(sample_finding: Finding):
 
 def test_json_report_generation(sample_finding: Finding, tmp_path: Path):
     result = ScanResult(
-        caulk_version="0.1.0",
+        caulk_version="0.2.0",
         target_path=str(tmp_path),
         findings=[sample_finding],
         summary=ScanSummary(total_findings=1),
@@ -74,7 +74,7 @@ def test_json_report_generation(sample_finding: Finding, tmp_path: Path):
     json_str = generate_json_report(result)
     parsed = json.loads(json_str)
 
-    assert parsed["caulk_version"] == "0.1.0"
+    assert parsed["caulk_version"] == "0.2.0"
     assert len(parsed["findings"]) == 1
     f = parsed["findings"][0]
     assert f["rule_id"] == "SEC002"

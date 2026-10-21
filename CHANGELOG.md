@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-10-21
 
 ### Added
 - **Official Composite GitHub Action (`action.yml`):** Production-ready composite action allowing automated security scanning in GitHub Actions on pushes and pull requests across Ubuntu and Windows runners.

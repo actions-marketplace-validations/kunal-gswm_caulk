@@ -19,7 +19,7 @@ inputs:
     required: false
     default: 'false'
   python-version:
-    description: 'Supported Python version to use for running Caulk'
+    description: 'Supported Python version to use for running Caulk (3.11, 3.12, 3.13)'
     required: false
     default: '3.12'
 
@@ -45,9 +45,8 @@ runs:
         INPUT_CHECK_VULNS: ${{ inputs.check-vulns }}
       run: |
         VERSION="$(echo "${INPUT_PYTHON_VERSION}" | tr -d '[:space:]')"
-        CLEAN_VER="${VERSION#>=}"
-        if [[ ! "${CLEAN_VER}" =~ ^3\.(1[1-9]|[2-9][0-9])(\..*)?$ ]]; then
-          echo "::error::Unsupported or invalid python-version '${INPUT_PYTHON_VERSION}'. Caulk requires Python 3.11 or newer (e.g. '3.11', '3.12', '3.13')." >&2
+        if [[ ! "${VERSION}" =~ ^3\.(11|12|13)(\..*)?$ ]]; then
+          echo "::error::Unsupported or invalid python-version '${INPUT_PYTHON_VERSION}'. Caulk v0.2.0 is tested and supported exclusively on Python 3.11, 3.12, and 3.13." >&2
           exit 1
         fi
 
