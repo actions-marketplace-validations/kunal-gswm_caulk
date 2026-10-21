@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -25,15 +26,16 @@ def test_cli_help(cli_runner: CliRunner):
 
 
 def test_cli_history_help(cli_runner: CliRunner):
-    result = cli_runner.invoke(app, ["history", "--help"])
+    result = cli_runner.invoke(app, ["history", "--help"], color=False)
     assert result.exit_code == EXIT_SUCCESS_CLEAN
     assert "scan" in result.output
 
-    res_scan = cli_runner.invoke(app, ["history", "scan", "--help"])
+    res_scan = cli_runner.invoke(app, ["history", "scan", "--help"], color=False)
     assert res_scan.exit_code == EXIT_SUCCESS_CLEAN
-    assert "--max-depth" in res_scan.output
-    assert "--severity-threshold" in res_scan.output
-    assert "--max-blob-size" in res_scan.output
+    clean_out = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", res_scan.output)
+    assert "--max-depth" in clean_out
+    assert "--severity-threshold" in clean_out
+    assert "--max-blob-size" in clean_out
 
 
 def test_cli_version(cli_runner: CliRunner):
