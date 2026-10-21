@@ -51,7 +51,7 @@ runs:
       run: |
         VERSION="$(echo "${INPUT_PYTHON_VERSION}" | tr -d '[:space:]')"
         if [[ ! "${VERSION}" =~ ^3\.(11|12|13)(\..*)?$ ]]; then
-          echo "::error::Unsupported or invalid python-version '${INPUT_PYTHON_VERSION}'. Caulk v0.2.0 is tested and supported exclusively on Python 3.11, 3.12, and 3.13." >&2
+          echo "::error::Unsupported or invalid python-version '${INPUT_PYTHON_VERSION}'. Caulk v0.3.0 is tested and supported exclusively on Python 3.11, 3.12, and 3.13." >&2
           exit 1
         fi
 

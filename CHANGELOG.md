@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.3.0] - Unreleased
+## [0.3.0] - 2026-10-21
 
 ### Added
 - **Python AST Static Application Security Testing (SAST001 & SAST002):**

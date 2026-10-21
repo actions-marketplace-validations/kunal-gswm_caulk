@@ -95,7 +95,7 @@ def test_finding_to_dict_and_from_dict(sample_finding: Finding):
 def test_scan_result_has_findings_above(sample_finding: Finding):
     """Verify threshold evaluation on ScanResult."""
     result = ScanResult(
-        caulk_version="0.2.0",
+        caulk_version="0.3.0",
         target_path=".",
         findings=[sample_finding],
         summary=ScanSummary(total_findings=1),
@@ -107,7 +107,7 @@ def test_scan_result_has_findings_above(sample_finding: Finding):
 
     # Empty result
     clean_result = ScanResult(
-        caulk_version="0.2.0",
+        caulk_version="0.3.0",
         target_path=".",
         findings=[],
         summary=ScanSummary(total_findings=0),
@@ -118,7 +118,7 @@ def test_scan_result_has_findings_above(sample_finding: Finding):
 def test_scan_result_json_serialization(sample_finding: Finding):
     """Verify valid JSON serialization."""
     result = ScanResult(
-        caulk_version="0.2.0",
+        caulk_version="0.3.0",
         target_path="/test/repo",
         findings=[sample_finding],
         summary=ScanSummary(total_findings=1),
@@ -126,7 +126,7 @@ def test_scan_result_json_serialization(sample_finding: Finding):
     json_str = result.to_json()
     parsed = json.loads(json_str)
 
-    assert parsed["caulk_version"] == "0.2.0"
+    assert parsed["caulk_version"] == "0.3.0"
     assert len(parsed["findings"]) == 1
     assert parsed["summary"]["total_findings"] == 1
 

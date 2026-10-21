@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "caulk-security"
-version = "0.2.0"
+version = "0.3.0"
 description = "Deterministic, open-source security checker for modern application repositories."
 readme = "README.md"
 license = { text = "MIT" }

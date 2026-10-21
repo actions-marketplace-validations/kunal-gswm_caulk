@@ -235,7 +235,7 @@ Generates a starter `.caulk.toml` configuration file with safe default exclusion
 ## 5. Sample Output
 
 ```
-╭─────────────────────────────────── CAULK v0.2.0 ───────────────────────────────────╮
+╭─────────────────────────────────── CAULK v0.3.0 ───────────────────────────────────╮
 │ Scanning target: E:/my-project                                                     │
 ╰────────────────────────────────────────────────────────────────────────────────────╯
 Files inspected: 42  Files skipped: 8  Ecosystems: python, docker  Duration: 0.12s

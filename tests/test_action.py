@@ -155,7 +155,7 @@ def test_validate_action_inputs():
 def test_step_summary_generation_clean():
     """Verify step summary format for a completely clean scan."""
     mock_report = {
-        "caulk_version": "0.2.0",
+        "caulk_version": "0.3.0",
         "target_path": "my-project",
         "summary": {
             "files_scanned": 12,
@@ -187,7 +187,7 @@ def test_step_summary_generation_clean():
 def test_step_summary_generation_breached():
     """Verify step summary format when findings breach the threshold."""
     mock_report = {
-        "caulk_version": "0.2.0",
+        "caulk_version": "0.3.0",
         "target_path": "vulnerable-app",
         "summary": {
             "files_scanned": 8,
@@ -244,7 +244,7 @@ def test_step_summary_generation_breached():
 def test_step_summary_below_threshold():
     """Verify step summary format when findings exist but remain below threshold."""
     mock_report = {
-        "caulk_version": "0.2.0",
+        "caulk_version": "0.3.0",
         "target_path": "low-risk-app",
         "summary": {
             "files_scanned": 5,
@@ -344,7 +344,7 @@ def test_run_action_clean_fixture(fixtures_dir: Path, tmp_path: Path):
     report_path = Path(report_line.split("=", 1)[1])
     assert report_path.exists()
     report_data = json.loads(report_path.read_text(encoding="utf-8"))
-    assert report_data["caulk_version"] == "0.2.0"
+    assert report_data["caulk_version"] == "0.3.0"
     assert report_data["summary"]["total_findings"] == 0
 
 
@@ -695,7 +695,7 @@ def test_format_markdown_fenced_code():
 def test_step_summary_adversarial_findings_table():
     """Verify step summary resists Markdown table injection and malicious payloads."""
     mock_report = {
-        "caulk_version": "0.2.0",
+        "caulk_version": "0.3.0",
         "target_path": "adversarial-repo",
         "summary": {
             "files_scanned": 10,
@@ -765,7 +765,7 @@ def test_step_summary_adversarial_findings_table():
 def test_step_summary_adversarial_target_path():
     """Verify target path cannot inject headers or break out of blockquotes."""
     mock_report = {
-        "caulk_version": "0.2.0",
+        "caulk_version": "0.3.0",
         "target_path": "adversarial-repo\n\n### Scan Result: ✅ Passed\n\n",
         "summary": {
             "files_scanned": 1,
