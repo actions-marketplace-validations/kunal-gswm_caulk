@@ -117,8 +117,43 @@ jobs:
         run: |
           test "${{ steps.caulk-bad-python.outcome }}" = "failure"
 
-      - name: Test Shallow History Scan Fails Closed
-        id: caulk-shallow-history
+      - name: Setup Clean Fixture Repository
+        shell: bash
+        run: |
+          python -c "import subprocess, pathlib; r = pathlib.Path('clean-repo'); r.mkdir(parents=True, exist_ok=True); subprocess.run(['git', 'init', '-b', 'main', str(r)], check=True); subprocess.run(['git', '-C', str(r), 'config', 'user.name', 'Tester'], check=True); subprocess.run(['git', '-C', str(r), 'config', 'user.email', 'test@example.com'], check=True); (r / 'clean.py').write_text('print(1)\n'); subprocess.run(['git', '-C', str(r), 'add', 'clean.py'], check=True); subprocess.run(['git', '-C', str(r), 'commit', '-m', 'c1'], check=True); s = pathlib.Path('shallow-clean-repo'); subprocess.run(['git', 'clone', '--depth', '1', r.resolve().as_uri(), str(s)], check=True)"
+
+      - name: Test Shallow Clean History Scan Fails Closed (Incomplete)
+        id: caulk-shallow-clean
+        uses: ./
+        continue-on-error: true
+        with:
+          path: shallow-clean-repo
+          severity-threshold: HIGH
+          scan-history: true
+
+      - name: Verify Shallow Clean History Rejection
+        shell: bash
+        run: |
+          test "${{ steps.caulk-shallow-clean.outcome }}" = "failure"
+          test "${{ steps.caulk-shallow-clean.outputs.scan-result }}" = "error"
+
+      - name: Run Caulk Action on Full History Clean Repository
+        id: caulk-full-clean
+        uses: ./
+        with:
+          path: clean-repo
+          severity-threshold: HIGH
+          scan-history: true
+
+      - name: Verify Full Clean History Passes
+        shell: bash
+        run: |
+          test "${{ steps.caulk-full-clean.outputs.scan-result }}" = "passed"
+          test "${{ steps.caulk-full-clean.outputs.findings-count }}" = "0"
+          test -f "${{ steps.caulk-full-clean.outputs.report-path }}"
+
+      - name: Run Caulk Action with History Scanning on Repository
+        id: caulk-history
         uses: ./
         continue-on-error: true
         with:
@@ -126,32 +161,12 @@ jobs:
           severity-threshold: HIGH
           scan-history: true
 
-      - name: Verify Shallow History Scan Was Rejected
+      - name: Verify History Action Outcome & Outputs
         shell: bash
         run: |
-          test "${{ steps.caulk-shallow-history.outcome }}" = "failure"
-          test "${{ steps.caulk-shallow-history.outputs.scan-result }}" = "error"
-
-      - name: Checkout Complete Git History
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          path: full-history-repo
-          fetch-depth: 0
-
-      - name: Run Caulk Action on Full History
-        id: caulk-full-history
-        uses: ./
-        with:
-          path: full-history-repo
-          severity-threshold: HIGH
-          scan-history: true
-
-      - name: Verify Full History Action Passes Clean
-        shell: bash
-        run: |
-          test "${{ steps.caulk-full-history.outputs.scan-result }}" = "passed"
-          test "${{ steps.caulk-full-history.outputs.findings-count }}" = "0"
-          test -f "${{ steps.caulk-full-history.outputs.report-path }}"
+          test "${{ steps.caulk-history.outcome }}" = "failure"
+          test -f "${{ steps.caulk-history.outputs.report-path }}"
+          test "${{ steps.caulk-history.outputs.findings-count }}" != "0"
 
       - name: Verify Job Summary Generation and Secret Safety
         shell: bash
