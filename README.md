@@ -53,7 +53,7 @@ For complete rule documentation, see [docs/detection-coverage.md](docs/detection
 Caulk requires **Python 3.11** or newer.
 
 > [!NOTE]
-> **Package Naming:** The official PyPI distribution package name is **`caulk-security`** (to prevent confusion with an unrelated historical package named `caulk`). The Python import package is `caulk`, and the CLI provides both the `caulk` command and the non-conflicting `caulk-security` executable.
+> **Package Naming:** The official PyPI distribution package name and installed console command is **`caulk-security`** (to prevent collision with the unrelated historical PyPI package and command named `caulk`). The Python import package remains `caulk` (`import caulk`).
 
 ### Standard Installation
 
@@ -88,58 +88,56 @@ uv pip install -e ".[dev]"
 ### Scan the Current Directory
 
 ```bash
-caulk scan .
-# or using the non-conflicting alias:
 caulk-security scan .
 ```
 
 ### Scan a Specific Repository or Folder
 
 ```bash
-caulk scan ./my-project
+caulk-security scan ./my-project
 ```
 
 ### Machine-Readable JSON Output
 
 ```bash
-caulk scan . --format json
+caulk-security scan . --format json
 ```
 
 ### Save Report to File
 
 ```bash
-caulk scan . --output caulk-report.json
+caulk-security scan . --output caulk-report.json
 ```
 
 ### Set Severity Failure Threshold for CI
 
 ```bash
 # Fail only on CRITICAL findings:
-caulk scan . --severity-threshold CRITICAL
+caulk-security scan . --severity-threshold CRITICAL
 
 # Fail on HIGH or CRITICAL (default):
-caulk scan . --severity-threshold HIGH
+caulk-security scan . --severity-threshold HIGH
 ```
 
 ### Optional External Dependency Vulnerability Check
 
 ```bash
-caulk scan . --check-vulns
+caulk-security scan . --check-vulns
 ```
 *(Queries OSV.dev batch API for exact resolved lockfile package versions. Only package names and versions are transmitted; source code and secrets are never sent.)*
 
 ### List All Active Rules
 
 ```bash
-caulk rules list
-caulk rules list --category SECRET
-caulk rules list --format json
+caulk-security rules list
+caulk-security rules list --category SECRET
+caulk-security rules list --format json
 ```
 
 ### Initialize Project Configuration
 
 ```bash
-caulk init
+caulk-security init
 ```
 Generates a starter `.caulk.toml` configuration file with safe default exclusions.
 
@@ -210,7 +208,7 @@ Finding Severity Summary
 
 ## 6. Configuration & Exclusions
 
-Initialize a starter `.caulk.toml` by running `caulk init`:
+Initialize a starter `.caulk.toml` by running `caulk-security init`:
 
 ```toml
 [scanner]

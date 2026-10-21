@@ -45,7 +45,6 @@ dev = [
 ]
 
 [project.scripts]
-caulk = "caulk.cli:app"
 caulk-security = "caulk.cli:app"
 
 [tool.hatch.build.targets.wheel]

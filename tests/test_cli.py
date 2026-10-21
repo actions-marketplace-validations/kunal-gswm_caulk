@@ -26,17 +26,18 @@ def test_cli_help(cli_runner: CliRunner):
 def test_cli_version(cli_runner: CliRunner):
     result = cli_runner.invoke(app, ["--version"])
     assert result.exit_code == EXIT_SUCCESS_CLEAN
-    assert "caulk v0.1.0" in result.output
+    assert "caulk-security v0.1.0" in result.output
 
 
 def test_distribution_console_scripts():
-    """Verify both 'caulk' and 'caulk-security' console entrypoints are registered."""
+    """Verify 'caulk-security' is the sole registered console entrypoint and 'caulk' is not registered."""
     import importlib.metadata
 
     eps = importlib.metadata.entry_points(group="console_scripts")
     caulk_eps = {ep.name: ep.value for ep in eps if "caulk" in ep.name}
-    assert caulk_eps.get("caulk") == "caulk.cli:app"
-    assert caulk_eps.get("caulk-security") == "caulk.cli:app"
+    assert "caulk-security" in caulk_eps
+    assert caulk_eps["caulk-security"] == "caulk.cli:app"
+    assert "caulk" not in caulk_eps
 
 
 def test_cli_scan_clean(cli_runner: CliRunner, fixtures_dir: Path):
@@ -123,3 +124,43 @@ def test_cli_init_command(cli_runner: CliRunner, tmp_path: Path):
     # Re-running with --force succeeds
     res3 = cli_runner.invoke(app, ["init", "--path", str(target_config), "--force"])
     assert res3.exit_code == EXIT_SUCCESS_CLEAN
+
+
+def test_executable_invocation(tmp_path: Path):
+    """Verify that caulk-security executable can be invoked as an external process."""
+    import shutil
+    import subprocess
+    import sys
+
+    exe = shutil.which("caulk-security")
+    if not exe:
+        candidate = Path(sys.executable).parent / (
+            "caulk-security.exe" if sys.platform == "win32" else "caulk-security"
+        )
+        if candidate.exists():
+            exe = str(candidate)
+
+    if not exe:
+        import pytest
+
+        pytest.skip("caulk-security executable not found in current environment")
+
+    # 1. Test --version
+    res_version = subprocess.run([exe, "--version"], capture_output=True, text=True, check=False)
+    assert res_version.returncode == 0
+    assert "caulk-security v0.1.0" in res_version.stdout
+
+    # 2. Test --help
+    res_help = subprocess.run([exe, "--help"], capture_output=True, text=True, check=False)
+    assert res_help.returncode == 0
+    assert "scan" in res_help.stdout
+
+    # 3. Test clean scan via executable
+    clean_dir = tmp_path / "clean_proj"
+    clean_dir.mkdir()
+    (clean_dir / "clean.py").write_text("print('hello')", encoding="utf-8")
+    res_scan = subprocess.run(
+        [exe, "scan", str(clean_dir)], capture_output=True, text=True, check=False
+    )
+    assert res_scan.returncode == 0
+    assert "Scan Clean" in res_scan.stdout

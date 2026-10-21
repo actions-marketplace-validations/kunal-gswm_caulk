@@ -33,7 +33,7 @@ EXIT_USAGE_ERROR = 2
 EXIT_EXECUTION_ERROR = 3
 
 app = typer.Typer(
-    name="caulk",
+    name="caulk-security",
     help="Deterministic, open-source security checker for repository code and dependencies.",
     no_args_is_help=True,
     add_completion=False,
@@ -57,7 +57,7 @@ class OutputFormat(StrEnum):
 
 def version_callback(value: bool) -> None:
     if value:
-        console.print(f"caulk v{__version__}")
+        console.print(f"caulk-security v{__version__}")
         raise typer.Exit(code=EXIT_SUCCESS_CLEAN)
 
 

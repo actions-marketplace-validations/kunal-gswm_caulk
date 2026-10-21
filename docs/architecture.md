@@ -4,7 +4,7 @@ Caulk is engineered as a deterministic, local-first security scanner with minima
 
 ```mermaid
 flowchart TD
-    CLI[CLI: caulk scan / init / rules] --> Config[CaulkConfig: .caulk.toml]
+    CLI[CLI: caulk-security scan / init / rules] --> Config[CaulkConfig: .caulk.toml]
     CLI --> Scanner[CaulkScanner Orchestrator]
     Config --> Scanner
 
@@ -49,7 +49,7 @@ flowchart TD
 ## 1. Scanner Pipeline
 
 1. **CLI Invocation:**
-   The user invokes `caulk scan [PATH]` with flags like `--format [text|json]`, `--severity-threshold [SEV]`, `--output [FILE]`, or `--check-vulns`.
+   The user invokes `caulk-security scan [PATH]` with flags like `--format [text|json]`, `--severity-threshold [SEV]`, `--output [FILE]`, or `--check-vulns`.
 2. **Configuration Loading:**
    `CaulkConfig` loads `.caulk.toml` (if present) using Python standard library `tomllib`, applying safe default limits (2MB file size ceiling, 30-level directory depth limit, standard directory exclusions like `.git` and `node_modules`).
 3. **Safe Filesystem Discovery (`discovery.py`):**

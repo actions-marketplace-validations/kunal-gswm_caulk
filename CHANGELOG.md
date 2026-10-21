@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - 2026-10-21
 
 ### Added
-- **Core CLI:** `caulk scan`, `caulk rules list`, and `caulk init` built with Typer and Rich.
-- **Packaging & Distribution:** PyPI distribution package name configured as `caulk-security` with console entrypoints for both `caulk` and `caulk-security` to prevent name collision with unrelated historical PyPI projects.
+- **Core CLI:** `caulk-security scan`, `caulk-security rules list`, and `caulk-security init` built with Typer and Rich.
+- **Packaging & Distribution:** PyPI distribution package name configured as `caulk-security` with `caulk-security` as the sole console entrypoint to resolve command collisions with the unrelated historical PyPI package named `caulk`.
 - **Deterministic Rule Engine:** Safe discovery walker with path traversal protection, symlink boundary validation, binary checks, and maximum depth guards.
 - **Finding Model:** Typed, versionable security finding model with normalized paths, severity rank comparison, and SHA-256 deduplication fingerprints.
 - **Secret Detection Rules (8 rules):**
