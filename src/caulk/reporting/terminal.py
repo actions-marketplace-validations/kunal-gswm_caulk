@@ -53,6 +53,25 @@ def render_terminal_report(result: ScanResult, console: Console | None = None) -
             f"[dim]Blobs cached:[/dim] [bold]{result.summary.blobs_cached}[/bold]  "
             f"[dim]Duration:[/dim] [bold]{result.summary.duration_seconds}s[/bold]"
         )
+        if result.summary.files_skipped > 0:
+            con.print(
+                f"[dim]Blobs skipped:[/dim] [bold]{result.summary.files_skipped}[/bold] "
+                f"({result.summary.blobs_skipped_binary} binary, {result.summary.blobs_skipped_oversized} oversized)"
+            )
+        if result.summary.scan_scope:
+            if result.summary.scan_scope.get("full_history") is False:
+                scope_parts = []
+                if result.summary.scan_scope.get("max_depth"):
+                    scope_parts.append(f"max-depth: {result.summary.scan_scope['max_depth']}")
+                if result.summary.scan_scope.get("since"):
+                    scope_parts.append(f"since: {result.summary.scan_scope['since']}")
+                if result.summary.scan_scope.get("ref"):
+                    scope_parts.append(f"ref: {result.summary.scan_scope['ref']}")
+                con.print(
+                    f"[dim]Scan scope:[/dim] [yellow]Partial history ({', '.join(scope_parts)})[/yellow]"
+                )
+            else:
+                con.print("[dim]Scan scope:[/dim] [green]All reachable history[/green]")
         if result.summary.refs_scanned:
             refs_str = ", ".join(result.summary.refs_scanned)
             con.print(f"[dim]Refs inspected:[/dim] [bold cyan]{refs_str}[/bold cyan]")
@@ -68,18 +87,32 @@ def render_terminal_report(result: ScanResult, console: Console | None = None) -
 
     # Findings
     if not result.findings:
-        con.print(
-            Panel(
-                Text(
-                    "No security issues detected by the active deterministic rules.\n\n"
-                    "Note: A clean scan does not prove an application is secure. "
-                    "Caulk inspects known static patterns and manifests, but cannot verify dynamic runtime behavior.",
-                    style="green",
-                ),
-                title="[bold green]Scan Clean[/bold green]",
-                border_style="green",
+        if not result.summary.is_complete:
+            con.print(
+                Panel(
+                    Text(
+                        "No security issues detected in the inspected portion of the repository, but the scan was INCOMPLETE.\n\n"
+                        "Coverage gaps, skipped oversized objects, or execution errors prevented complete inspection. "
+                        "This repository cannot be considered clean.",
+                        style="yellow",
+                    ),
+                    title="[bold yellow]Scan Incomplete[/bold yellow]",
+                    border_style="yellow",
+                )
             )
-        )
+        else:
+            con.print(
+                Panel(
+                    Text(
+                        "No security issues detected by the active deterministic rules.\n\n"
+                        "Note: A clean scan does not prove an application is secure. "
+                        "Caulk inspects known static patterns and manifests, but cannot verify dynamic runtime behavior.",
+                        style="green",
+                    ),
+                    title="[bold green]Scan Clean[/bold green]",
+                    border_style="green",
+                )
+            )
     else:
         con.print(f"[bold]Findings ({len(result.findings)}):[/bold]")
         con.print()

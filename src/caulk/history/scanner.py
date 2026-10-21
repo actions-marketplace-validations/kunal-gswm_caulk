@@ -12,12 +12,15 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from caulk import __version__
 from caulk.config import DEFAULT_EXCLUDED_PATTERNS, CaulkConfig
 from caulk.discovery import DiscoveredFile, ProjectInventory, matches_any_pattern
 from caulk.history.git import (
+    BlobReadStatus,
     GitBlobReader,
+    GitError,
     get_local_refs,
     is_git_repo,
     parse_blob_size,
@@ -114,6 +117,11 @@ class GitHistoryScanner:
         self._blob_cache: dict[str, list[FindingTemplate]] = {}
         self._blobs_scanned: int = 0
         self._blobs_cached: int = 0
+        self._blobs_skipped_binary: int = 0
+        self._blobs_skipped_oversized: int = 0
+        self._blobs_missing: int = 0
+        self._blobs_corrupt: int = 0
+        self._blobs_read_errors: int = 0
         self._commits_scanned: int = 0
 
     def _get_blob_findings(
@@ -121,6 +129,7 @@ class GitHistoryScanner:
         blob_sha: str,
         rel_path: str,
         blob_reader: GitBlobReader,
+        errors: list[str],
     ) -> list[FindingTemplate]:
         """Scan a blob for secrets or retrieve previously cached finding templates."""
         if not blob_sha or blob_sha.startswith("0000000000"):
@@ -135,77 +144,104 @@ class GitHistoryScanner:
 
         if blob_sha in self._blob_cache:
             self._blobs_cached += 1
-            templates = list(self._blob_cache[blob_sha])
-        else:
-            self._blobs_scanned += 1
-            text = blob_reader.read_blob_text(blob_sha, max_size=self.max_blob_size)
-            if text is None:
-                self._blob_cache[blob_sha] = []
-                return []
+            return list(self._blob_cache[blob_sha])
 
-            inventory = ProjectInventory(root_path=self.repo_path, files=[discovered_file])
-            context = ScanContext(
-                inventory=inventory,
-                config=self.config,
-                _file_cache={fake_path: text},
-                _line_cache={fake_path: text.splitlines()},
+        read_res = blob_reader.read_blob(blob_sha, max_size=self.max_blob_size)
+
+        if read_res.status == BlobReadStatus.SKIPPED_BINARY:
+            self._blobs_skipped_binary += 1
+            self._blob_cache[blob_sha] = []
+            return []
+
+        if read_res.status == BlobReadStatus.SKIPPED_OVERSIZED:
+            self._blobs_skipped_oversized += 1
+            errors.append(
+                f"Skipped oversized blob {blob_sha[:8]} ({read_res.size} bytes) for path '{rel_path}' "
+                f"exceeding configured limit of {self.max_blob_size} bytes."
             )
+            self._blob_cache[blob_sha] = []
+            return []
 
-            templates = []
-            for rule in self.content_rules:
-                try:
-                    rule_findings = rule.scan_file(discovered_file, context)
-                    for f in rule_findings:
-                        cleaned_ev = sanitize_evidence(f.evidence)
-                        templates.append(
-                            FindingTemplate(
-                                rule_id=f.rule_id,
-                                title=f.title,
-                                description=f.description,
-                                severity=f.severity,
-                                confidence=f.confidence,
-                                category=f.category,
-                                line_number=f.line_number,
-                                evidence=cleaned_ev,
-                                impact=f.impact,
-                                references=tuple(f.references),
-                            )
+        if read_res.status == BlobReadStatus.MISSING_OBJECT:
+            self._blobs_missing += 1
+            errors.append(f"Missing Git object {blob_sha[:8]} for path '{rel_path}'.")
+            self._blob_cache[blob_sha] = []
+            return []
+
+        if read_res.status == BlobReadStatus.CORRUPT_OBJECT:
+            self._blobs_corrupt += 1
+            err_msg = read_res.error_message or "corrupt object"
+            errors.append(f"Corrupt Git object {blob_sha[:8]} for path '{rel_path}': {err_msg}")
+            self._blob_cache[blob_sha] = []
+            return []
+
+        if read_res.status == BlobReadStatus.READ_ERROR:
+            self._blobs_read_errors += 1
+            err_msg = read_res.error_message or "read error"
+            errors.append(
+                f"Error reading Git object {blob_sha[:8]} for path '{rel_path}': {err_msg}"
+            )
+            self._blob_cache[blob_sha] = []
+            return []
+
+        # Successful read of text content
+        self._blobs_scanned += 1
+        text = read_res.text or ""
+
+        inventory = ProjectInventory(root_path=self.repo_path, files=[discovered_file])
+        context = ScanContext(
+            inventory=inventory,
+            config=self.config,
+            _file_cache={fake_path: text},
+            _line_cache={fake_path: text.splitlines()},
+        )
+
+        templates: list[FindingTemplate] = []
+        for rule in self.content_rules:
+            try:
+                rule_findings = rule.scan_file(discovered_file, context)
+                for f in rule_findings:
+                    cleaned_ev = sanitize_evidence(f.evidence)
+                    templates.append(
+                        FindingTemplate(
+                            rule_id=f.rule_id,
+                            title=f.title,
+                            description=f.description,
+                            severity=f.severity,
+                            confidence=f.confidence,
+                            category=f.category,
+                            line_number=f.line_number,
+                            evidence=cleaned_ev,
+                            impact=f.impact,
+                            references=tuple(f.references),
                         )
-                except Exception:
-                    continue
-
-            self._blob_cache[blob_sha] = list(templates)
+                    )
+            except Exception:
+                continue
 
         # Check path-specific SensitiveEnvFileRule if applicable
         if self.env_rule is not None and self.env_rule.applies_to_file(discovered_file):
-            text = blob_reader.read_blob_text(blob_sha, max_size=self.max_blob_size)
-            if text:
-                context = ScanContext(
-                    inventory=ProjectInventory(root_path=self.repo_path, files=[discovered_file]),
-                    config=self.config,
-                    _file_cache={fake_path: text},
-                    _line_cache={fake_path: text.splitlines()},
-                )
-                try:
-                    for f in self.env_rule.scan_file(discovered_file, context):
-                        cleaned_ev = sanitize_evidence(f.evidence)
-                        templates.append(
-                            FindingTemplate(
-                                rule_id=f.rule_id,
-                                title=f.title,
-                                description=f.description,
-                                severity=f.severity,
-                                confidence=f.confidence,
-                                category=f.category,
-                                line_number=f.line_number,
-                                evidence=cleaned_ev,
-                                impact=f.impact,
-                                references=tuple(f.references),
-                            )
+            try:
+                for f in self.env_rule.scan_file(discovered_file, context):
+                    cleaned_ev = sanitize_evidence(f.evidence)
+                    templates.append(
+                        FindingTemplate(
+                            rule_id=f.rule_id,
+                            title=f.title,
+                            description=f.description,
+                            severity=f.severity,
+                            confidence=f.confidence,
+                            category=f.category,
+                            line_number=f.line_number,
+                            evidence=cleaned_ev,
+                            impact=f.impact,
+                            references=tuple(f.references),
                         )
-                except Exception:
-                    pass
+                    )
+            except Exception:
+                pass
 
+        self._blob_cache[blob_sha] = list(templates)
         return templates
 
     def scan(
@@ -232,84 +268,118 @@ class GitHistoryScanner:
                 errors=[f"Target path is not a valid Git repository: {self.repo_path}"],
             )
 
-        refs_scanned = [self.ref] if self.ref else get_local_refs(self.repo_path)
+        refs_scanned: list[str] = []
+        try:
+            refs_scanned = [self.ref] if self.ref else get_local_refs(self.repo_path)
+        except GitError as err:
+            return ScanResult(
+                caulk_version=__version__,
+                target_path=str(self.repo_path),
+                findings=[],
+                summary=ScanSummary(
+                    scan_mode="git_history",
+                    targets_scanned=1,
+                    is_complete=False,
+                ),
+                errors=[f"Failed to query repository refs: {err}"],
+            )
+
         findings_by_fingerprint: dict[str, Finding] = {}
         is_complete = True
 
-        with GitBlobReader(self.repo_path) as blob_reader:
-            commit_generator = stream_git_log(
-                repo_path=self.repo_path,
-                max_depth=self.max_depth,
-                since=self.since,
-                ref=self.ref,
-            )
+        try:
+            with GitBlobReader(self.repo_path) as blob_reader:
+                commit_generator = stream_git_log(
+                    repo_path=self.repo_path,
+                    max_depth=self.max_depth,
+                    since=self.since,
+                    ref=self.ref,
+                )
 
-            for commit_diff in commit_generator:
-                self._commits_scanned += 1
+                for commit_diff in commit_generator:
+                    self._commits_scanned += 1
 
-                # Check timeout limit if set
-                if (
-                    self.timeout_seconds is not None
-                    and (time.perf_counter() - start_time) > self.timeout_seconds
-                ):
-                    errors.append(
-                        f"Scan exceeded timeout limit of {self.timeout_seconds:.1f} seconds. Traversal stopped early."
-                    )
-                    is_complete = False
-                    break
+                    # Check timeout limit if set
+                    if (
+                        self.timeout_seconds is not None
+                        and (time.perf_counter() - start_time) > self.timeout_seconds
+                    ):
+                        errors.append(
+                            f"Scan exceeded timeout limit of {self.timeout_seconds:.1f} seconds. Traversal stopped early."
+                        )
+                        is_complete = False
+                        break
 
-                commit = commit_diff.commit
-                for entry in commit_diff.entries:
-                    filename = Path(entry.path).name
-                    if matches_any_pattern(entry.path, filename, self.exclusions):
-                        continue
-
-                    dst_templates = self._get_blob_findings(
-                        entry.dst_blob_sha, entry.path, blob_reader
-                    )
-                    if not dst_templates:
-                        continue
-
-                    # Collect findings already present in parent commit blobs
-                    parent_findings: set[tuple[str, str]] = set()
-                    for src_sha in entry.src_blob_shas:
-                        src_templates = self._get_blob_findings(src_sha, entry.path, blob_reader)
-                        for st in src_templates:
-                            parent_findings.add((st.rule_id, st.evidence))
-
-                    # Findings newly introduced in this commit
-                    for tmpl in dst_templates:
-                        if (tmpl.rule_id, tmpl.evidence) in parent_findings:
+                    commit = commit_diff.commit
+                    for entry in commit_diff.entries:
+                        filename = Path(entry.path).name
+                        if matches_any_pattern(entry.path, filename, self.exclusions):
                             continue
 
-                        remediation = format_historical_remediation(tmpl.rule_id, commit.sha)
-                        finding = Finding(
-                            rule_id=tmpl.rule_id,
-                            title=tmpl.title,
-                            description=tmpl.description,
-                            severity=tmpl.severity,
-                            confidence=tmpl.confidence,
-                            category=tmpl.category,
-                            file_path=entry.path,
-                            line_number=tmpl.line_number,
-                            evidence=tmpl.evidence,
-                            impact=tmpl.impact,
-                            remediation=remediation,
-                            references=list(tmpl.references),
-                            status=FindingStatus.HISTORICAL,
-                            detected_by="caulk-history-engine",
-                            commit_sha=commit.sha,
-                            commit_timestamp=commit.timestamp,
-                            commit_author=commit.author,
-                            commit_subject=commit.subject,
+                        dst_templates = self._get_blob_findings(
+                            entry.dst_blob_sha, entry.path, blob_reader, errors
                         )
+                        if not dst_templates:
+                            continue
 
-                        if finding.fingerprint not in findings_by_fingerprint:
-                            findings_by_fingerprint[finding.fingerprint] = finding
+                        # Collect findings already present in parent commit blobs
+                        parent_findings: set[tuple[str, str]] = set()
+                        for src_sha in entry.src_blob_shas:
+                            src_templates = self._get_blob_findings(
+                                src_sha, entry.path, blob_reader, errors
+                            )
+                            for st in src_templates:
+                                parent_findings.add((st.rule_id, st.evidence))
 
-                if progress_callback is not None:
-                    with contextlib.suppress(Exception):
-                        progress_callback(self._commits_scanned, len(findings_by_fingerprint))
+                        # Findings newly introduced in this commit
+                        for tmpl in dst_templates:
+                            if (tmpl.rule_id, tmpl.evidence) in parent_findings:
+                                continue
+
+                            remediation = format_historical_remediation(tmpl.rule_id, commit.sha)
+                            finding = Finding(
+                                rule_id=tmpl.rule_id,
+                                title=tmpl.title,
+                                description=tmpl.description,
+                                severity=tmpl.severity,
+                                confidence=tmpl.confidence,
+                                category=tmpl.category,
+                                file_path=entry.path,
+                                line_number=tmpl.line_number,
+                                evidence=tmpl.evidence,
+                                impact=tmpl.impact,
+                                remediation=remediation,
+                                references=list(tmpl.references),
+                                status=FindingStatus.HISTORICAL,
+                                detected_by="caulk-history-engine",
+                                commit_sha=commit.sha,
+                                commit_timestamp=commit.timestamp,
+                                commit_author=commit.author,
+                                commit_subject=commit.subject,
+                            )
+
+                            if finding.fingerprint not in findings_by_fingerprint:
+                                findings_by_fingerprint[finding.fingerprint] = finding
+
+                    if progress_callback is not None:
+                        with contextlib.suppress(Exception):
+                            progress_callback(self._commits_scanned, len(findings_by_fingerprint))
+
+        except GitError as err:
+            errors.append(f"Git traversal failed: {err}")
+            is_complete = False
+        except Exception as err:
+            errors.append(f"Unexpected error during Git history scan: {err}")
+            is_complete = False
+
+        # Any coverage gap, missing object, corrupt object, or read error marks scan incomplete
+        if (
+            self._blobs_skipped_oversized > 0
+            or self._blobs_missing > 0
+            or self._blobs_corrupt > 0
+            or self._blobs_read_errors > 0
+        ):
+            is_complete = False
 
         # Sort findings deterministically:
         # Highest severity first, then by file path, line number, timestamp, rule ID
@@ -337,23 +407,64 @@ class GitHistoryScanner:
         for f in sorted_findings:
             sev_counts[f.severity.value] = sev_counts.get(f.severity.value, 0) + 1
 
+        is_full_history = self.max_depth is None and self.since is None and self.ref is None
+        scan_scope: dict[str, Any] = {
+            "full_history": is_full_history,
+            "max_depth": self.max_depth,
+            "since": self.since,
+            "ref": self.ref,
+        }
+
+        checks_not_performed = [
+            "External advisory lookup skipped in Git history mode.",
+            "Non-secret rules skipped in Git history mode (SEC001-SEC008 active).",
+            "Unreachable Git objects and un-fetched remote refs were not inspected.",
+        ]
+
+        if self.max_depth is not None:
+            checks_not_performed.append(
+                f"History scan scope was limited to {self.max_depth} commit(s) via --max-depth; older history was not inspected."
+            )
+        if self.since is not None:
+            checks_not_performed.append(
+                f"History scan scope was limited to commits since '{self.since}' via --since; prior history was not inspected."
+            )
+        if self.ref is not None:
+            checks_not_performed.append(
+                f"History scan scope was limited to ref '{self.ref}' via --ref; other branches and tags were not inspected."
+            )
+        if self._blobs_skipped_oversized > 0:
+            checks_not_performed.append(
+                f"{self._blobs_skipped_oversized} oversized blob(s) exceeded max size ({self.max_blob_size} bytes) and were skipped."
+            )
+
+        total_skipped = (
+            self._blobs_skipped_binary
+            + self._blobs_skipped_oversized
+            + self._blobs_missing
+            + self._blobs_corrupt
+            + self._blobs_read_errors
+        )
+
         summary = ScanSummary(
             targets_scanned=1,
             files_scanned=self._blobs_scanned,
-            files_skipped=0,
+            files_skipped=total_skipped,
             duration_seconds=round(duration, 3),
             total_findings=len(sorted_findings),
             severity_counts=sev_counts,
             ecosystems_detected=["git"],
-            checks_not_performed=[
-                "External advisory lookup skipped in Git history mode.",
-                "Non-secret rules skipped in Git history mode (SEC001-SEC008 active).",
-                "Unreachable Git objects and un-fetched remote refs were not inspected.",
-            ],
+            checks_not_performed=checks_not_performed,
             scan_mode="git_history",
             commits_scanned=self._commits_scanned,
             blobs_scanned=self._blobs_scanned,
             blobs_cached=self._blobs_cached,
+            blobs_skipped_binary=self._blobs_skipped_binary,
+            blobs_skipped_oversized=self._blobs_skipped_oversized,
+            blobs_skipped_missing=self._blobs_missing,
+            blobs_skipped_corrupt=self._blobs_corrupt,
+            blobs_skipped_error=self._blobs_read_errors,
+            scan_scope=scan_scope,
             refs_scanned=refs_scanned,
             is_complete=is_complete,
         )

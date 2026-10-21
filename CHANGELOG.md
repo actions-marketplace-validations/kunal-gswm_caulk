@@ -21,7 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Full handling of merge conflict resolutions (evil merges) and multiple independent root commits (orphan branches).
   - Mandatory 5-point remediation guidance on all historical findings (exposure window, deletion ineffectiveness, immediate provider rotation, access log auditing, and safe post-rotation history rewriting).
   - Configurable scan limits: `--severity-threshold`, `--max-depth`, `--since`, `--ref`, `--max-blob-size`, `--exclude`, and `--no-progress`.
-  - Deterministic exit codes: `0` for clean, `1` for findings at or above threshold, `2` for usage errors.
+  - Deterministic exit codes: `0` for clean, `1` for findings at or above threshold, `2` for usage errors, and `3` for execution errors or incomplete scans.
+- **Fail-Safe Git Subprocess & Object Handling:**
+  - Typed blob read outcome isolation (`BlobReadStatus`: `SUCCESS`, `SKIPPED_BINARY`, `SKIPPED_OVERSIZED`, `MISSING_OBJECT`, `CORRUPT_OBJECT`, `READ_ERROR`).
+  - Concurrent background stderr draining threads preventing pipe buffer deadlocks during `git log` and `git cat-file --batch`.
+  - Strict input validation for `--ref` preventing option injection and invalid ref syntax.
+  - Scan completeness tracking (`is_complete = False` on missing objects, corrupt objects, skipped oversized blobs, or timeouts).
+  - Transparent scan scope disclosure in terminal reports, JSON reports, and GitHub Step Summaries (`--max-depth`, `--since`, `--ref`).
+  - Strict exit semantics: incomplete history scans cannot receive clean exit code `0`; exit `3` (`EXIT_EXECUTION_ERROR`) is enforced.
+  - GitHub Action fail-safe enforcement: incomplete history scans emit `scan-result=error` and render `⚠️ Incomplete Inspection` step summaries.
 - **GitHub Action History Scanning Support:**
   - Added optional `scan-history: 'false'` action input allowing CI workflows to run historical secret scanning instead of working-tree inspection.
   - Extended GitHub Step Summary reporting with commit SHA coordinates and history scan metrics.

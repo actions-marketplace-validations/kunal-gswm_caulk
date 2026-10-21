@@ -256,21 +256,7 @@ def run_action(
         return EXIT_EXECUTION_ERROR
 
     # 6. Process Scan Results
-    if scan_code in (EXIT_SUCCESS_CLEAN, EXIT_FINDINGS_BREACH_THRESHOLD):
-        # Validate that JSON report was actually generated
-        if not report_file.exists():
-            err_msg = f"Scanner completed with code {scan_code} but report file was not generated: {report_file}"
-            err_stream.write(f"{err_msg}\n")
-            write_step_summary(
-                generate_error_summary(err_msg, error_code=EXIT_EXECUTION_ERROR),
-                summary_file=summary_file,
-            )
-            write_action_outputs(
-                {"scan-result": "error", "findings-count": "0", "report-path": ""},
-                output_file=output_file,
-            )
-            return EXIT_EXECUTION_ERROR
-
+    if report_file.exists():
         try:
             report_data = json.loads(report_file.read_text(encoding="utf-8"))
         except Exception as err:
@@ -286,16 +272,28 @@ def run_action(
             )
             return EXIT_EXECUTION_ERROR
 
-        # Generate and write step summary
+        is_complete = bool(report_data.get("summary", {}).get("is_complete", True))
+
+        # Enforce execution error if an incomplete scan somehow reported clean exit
+        if not is_complete and scan_code == EXIT_SUCCESS_CLEAN:
+            scan_code = EXIT_EXECUTION_ERROR
+
+        # Generate and write step summary from report
         summary_md = generate_step_summary(report_data, threshold=threshold)
         write_step_summary(summary_md, summary_file=summary_file)
 
         # Emit action outputs
         total_findings = str(report_data.get("summary", {}).get("total_findings", 0))
-        scan_result = "passed" if scan_code == EXIT_SUCCESS_CLEAN else "failed"
+        if scan_code == EXIT_SUCCESS_CLEAN and is_complete:
+            action_status = "passed"
+        elif scan_code == EXIT_FINDINGS_BREACH_THRESHOLD:
+            action_status = "failed"
+        else:
+            action_status = "error"
+
         write_action_outputs(
             {
-                "scan-result": scan_result,
+                "scan-result": action_status,
                 "findings-count": total_findings,
                 "report-path": str(report_file),
             },
@@ -304,7 +302,7 @@ def run_action(
 
         return scan_code
 
-    # 7. Scanner Error Handling (exit code 2 or 3)
+    # 7. Scanner Error Handling when report file was not produced (exit code 2 or 3)
     error_summary = generate_error_summary(
         f"Scanner exited with code {scan_code} on target: {target_path}",
         error_code=scan_code,

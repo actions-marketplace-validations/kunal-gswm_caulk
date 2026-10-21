@@ -16,6 +16,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from caulk.cli import (
+    EXIT_EXECUTION_ERROR,
     EXIT_FINDINGS_BREACH_THRESHOLD,
     EXIT_SUCCESS_CLEAN,
     EXIT_USAGE_ERROR,
@@ -26,6 +27,7 @@ from caulk.history.git import (
     get_local_refs,
     is_git_repo,
     parse_blob_size,
+    validate_git_ref,
 )
 from caulk.history.scanner import GitHistoryScanner
 from caulk.models import FindingStatus
@@ -560,3 +562,272 @@ def test_cli_exit_codes_and_options(tmp_path: Path, cli_runner: CliRunner):
     assert res_depth.exit_code == EXIT_FINDINGS_BREACH_THRESHOLD
     parsed = json.loads(res_depth.output)
     assert parsed["summary"]["commits_scanned"] == 1
+
+
+# ==============================================================================
+# Hardened Regression Tests (v0.3.0 Fail-Safe Audit)
+# ==============================================================================
+
+
+def test_validate_git_ref() -> None:
+    """Verify validate_git_ref rejects option injection, empty refs, and invalid ref syntax."""
+    # Valid refs
+    validate_git_ref("main")
+    validate_git_ref("feature/my-branch")
+    validate_git_ref("v1.0.0")
+    validate_git_ref("refs/heads/main")
+    validate_git_ref("HEAD")
+    validate_git_ref("b372ea9481948194819481948194819481948194")
+
+    # Invalid refs
+    import pytest
+
+    for bad_ref in [
+        "-v",
+        "--help",
+        "--upload-pack=foo",
+        "",
+        "   ",
+        "bad ref with spaces",
+        "bad..ref",
+        "branch.lock",
+        "branch/",
+        "/leading-slash",
+        "bad~ref",
+        "bad^ref",
+        "bad:ref",
+        "bad?ref",
+        "bad*ref",
+        "bad[ref",
+    ]:
+        with pytest.raises(ValueError):
+            validate_git_ref(bad_ref)
+
+
+def test_git_log_command_failure_after_validation(tmp_path: Path, cli_runner: CliRunner) -> None:
+    """Verify Git log command failure after repo validation sets is_complete=False and exits with code 3."""
+    repo = make_git_repo(tmp_path)
+    (repo / "file.txt").write_text("Hello\n")
+    git_commit(repo, "Commit 1")
+
+    # Corrupt HEAD to make git log fail
+    head_file = repo / ".git" / "HEAD"
+    head_file.write_text("ref: refs/heads/corrupted_nonexistent_branch\n")
+
+    scanner = GitHistoryScanner(repo)
+    result = scanner.scan()
+
+    assert result.summary.is_complete is False
+    assert len(result.errors) > 0
+    assert any(
+        "Git traversal failed" in e or "Failed to query repository refs" in e for e in result.errors
+    )
+
+    res = cli_runner.invoke(app, ["history", "scan", str(repo)])
+    assert res.exit_code == EXIT_EXECUTION_ERROR
+
+
+def test_invalid_and_missing_refs(tmp_path: Path, cli_runner: CliRunner) -> None:
+    """Verify invalid refs yield usage error (exit 2) and missing refs yield execution error (exit 3)."""
+    repo = make_git_repo(tmp_path)
+    (repo / "clean.txt").write_text("Clean\n")
+    git_commit(repo, "Clean commit")
+
+    # 1. Option injection ref -> Exit 2
+    res_bad_option = cli_runner.invoke(app, ["history", "scan", str(repo), "--ref", "-v"])
+    assert res_bad_option.exit_code == EXIT_USAGE_ERROR
+    assert "Git ref cannot start with '-'" in res_bad_option.output
+
+    # 2. Syntax-invalid ref -> Exit 2
+    res_bad_syntax = cli_runner.invoke(app, ["history", "scan", str(repo), "--ref", "bad..ref"])
+    assert res_bad_syntax.exit_code == EXIT_USAGE_ERROR
+
+    # 3. Missing non-existent ref -> Exit 3 with incomplete scan
+    res_missing_ref = cli_runner.invoke(
+        app, ["history", "scan", str(repo), "--ref", "nonexistent_branch_xyz"]
+    )
+    assert res_missing_ref.exit_code == EXIT_EXECUTION_ERROR
+
+
+def test_corrupt_or_unavailable_objects(tmp_path: Path, cli_runner: CliRunner) -> None:
+    """Verify corrupt or unavailable Git objects mark scan incomplete and exit with code 3."""
+    import stat
+
+    repo = make_git_repo(tmp_path)
+    (repo / "data.txt").write_text("Important Data\n")
+    git_commit(repo, "Add data")
+
+    # Obtain blob SHA
+    blob_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD:data.txt"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    # Corrupt the blob on disk
+    obj_dir = repo / ".git" / "objects" / blob_sha[:2]
+    obj_file = obj_dir / blob_sha[2:]
+    assert obj_file.exists(), f"Object file {obj_file} should exist"
+
+    # Make writable and overwrite with corrupt garbage
+    obj_file.chmod(stat.S_IWRITE | stat.S_IREAD)
+    obj_file.write_bytes(b"CORRUPTED_GARBAGE_DATA_1234567890")
+
+    # Test scanner directly
+    scanner = GitHistoryScanner(repo)
+    result = scanner.scan()
+
+    assert result.summary.is_complete is False
+    assert (result.summary.blobs_skipped_corrupt + result.summary.blobs_skipped_missing) >= 1
+    assert len(result.errors) > 0
+    assert any("Corrupt Git object" in e or "Missing Git object" in e for e in result.errors)
+
+    # Test CLI output and exit code
+    res = cli_runner.invoke(app, ["history", "scan", str(repo)])
+    assert res.exit_code == EXIT_EXECUTION_ERROR
+    assert "Scan Incomplete" in res.output
+
+
+def test_oversized_historical_blob_with_secret(tmp_path: Path, cli_runner: CliRunner) -> None:
+    """Verify oversized blob containing a secret is skipped, marked incomplete, and exits with code 3."""
+    repo = make_git_repo(tmp_path)
+
+    # Create a 60KB file containing a synthetic secret
+    secret_line = f"AWS_KEY = '{synthetic_aws_key()}'\n"
+    padding = "X" * 60000 + "\n"
+    (repo / "oversized.py").write_text(secret_line + padding)
+    git_commit(repo, "Add oversized file with credential")
+
+    # Scan with limit of 20KB
+    scanner = GitHistoryScanner(repo, max_blob_size="20KB")
+    result = scanner.scan()
+
+    # Finding must NOT be reported because blob was not scanned
+    assert len(result.findings) == 0
+    # Scan must be marked incomplete
+    assert result.summary.is_complete is False
+    assert result.summary.blobs_skipped_oversized == 1
+    assert result.summary.files_skipped >= 1
+    assert any("Skipped oversized blob" in e for e in result.errors)
+
+    # CLI must NOT report clean (code 0); must exit 3 (execution error)
+    res = cli_runner.invoke(app, ["history", "scan", str(repo), "--max-blob-size", "20KB"])
+    assert res.exit_code == EXIT_EXECUTION_ERROR
+    assert "Scan Incomplete" in res.output
+    assert "oversized" in res.output.lower()
+
+
+def test_normal_binary_file_handling(tmp_path: Path, cli_runner: CliRunner) -> None:
+    """Verify normal binary files are intentionally skipped without marking scan incomplete."""
+    repo = make_git_repo(tmp_path)
+    (repo / "logo.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    )
+    (repo / "code.py").write_text("print('clean code')\n")
+    git_commit(repo, "Add logo and clean code")
+
+    scanner = GitHistoryScanner(repo)
+    result = scanner.scan()
+
+    assert len(result.findings) == 0
+    assert result.summary.blobs_skipped_binary == 1
+    assert result.summary.is_complete is True
+    assert len(result.errors) == 0
+
+    res = cli_runner.invoke(app, ["history", "scan", str(repo)])
+    assert res.exit_code == EXIT_SUCCESS_CLEAN
+    assert "Scan Clean" in res.output
+
+
+def test_interrupted_traversal_and_timeout(tmp_path: Path) -> None:
+    """Verify interrupted traversal due to timeout sets is_complete=False and records diagnostic message."""
+    repo = make_git_repo(tmp_path)
+    for i in range(5):
+        (repo / f"file_{i}.txt").write_text(f"content {i}\n")
+        git_commit(repo, f"commit {i}")
+
+    # Set very small timeout
+    scanner = GitHistoryScanner(repo, timeout_seconds=0.000001)
+    result = scanner.scan()
+
+    assert result.summary.is_complete is False
+    assert any("timeout" in e.lower() for e in result.errors)
+
+
+def test_explicit_depth_and_time_filters(tmp_path: Path, cli_runner: CliRunner) -> None:
+    """Verify explicit depth and time filters define scan scope and disclose it in reports."""
+    repo = make_git_repo(tmp_path)
+    (repo / "f1.txt").write_text("v1\n")
+    git_commit(repo, "commit 1")
+    (repo / "f2.txt").write_text("v2\n")
+    git_commit(repo, "commit 2")
+    (repo / "f3.txt").write_text("v3\n")
+    git_commit(repo, "commit 3")
+
+    # Scan with max-depth 1
+    scanner = GitHistoryScanner(repo, max_depth=1)
+    result = scanner.scan()
+
+    assert result.summary.commits_scanned == 1
+    assert result.summary.scan_scope["max_depth"] == 1
+    assert result.summary.scan_scope["full_history"] is False
+    assert result.summary.is_complete is True
+    assert any(
+        "History scan scope was limited to 1 commit(s)" in c
+        for c in result.summary.checks_not_performed
+    )
+
+    res_cli = cli_runner.invoke(app, ["history", "scan", str(repo), "--max-depth", "1"])
+    assert res_cli.exit_code == EXIT_SUCCESS_CLEAN
+    assert "Partial history" in res_cli.output
+
+    # Scan with since
+    scanner_since = GitHistoryScanner(repo, since="2026-01-01")
+    res_since = scanner_since.scan()
+    assert res_since.summary.scan_scope["since"] == "2026-01-01"
+    assert any(
+        "History scan scope was limited to commits since" in c
+        for c in res_since.summary.checks_not_performed
+    )
+
+
+def test_zero_findings_with_incomplete_coverage(tmp_path: Path, cli_runner: CliRunner) -> None:
+    """Verify a scan with zero findings but incomplete coverage exits 3 and displays Scan Incomplete."""
+    repo = make_git_repo(tmp_path)
+    (repo / "big_clean.txt").write_text("Hello Clean " * 5000)
+    git_commit(repo, "Add big clean file")
+
+    res = cli_runner.invoke(app, ["history", "scan", str(repo), "--max-blob-size", "5KB"])
+    assert res.exit_code == EXIT_EXECUTION_ERROR
+    assert "Scan Incomplete" in res.output
+    assert "Scan Clean" not in res.output
+
+
+def test_no_raw_credentials_in_diagnostics_or_reports(
+    tmp_path: Path, cli_runner: CliRunner
+) -> None:
+    """Verify credentials never appear raw in diagnostic messages, JSON, or step summary."""
+    repo = make_git_repo(tmp_path)
+    raw_key = synthetic_aws_key()
+    raw_tok = synthetic_github_token()
+    (repo / "creds.py").write_text(f"AWS = '{raw_key}'\nGH = '{raw_tok}'\n")
+    git_commit(repo, "Add credentials")
+
+    json_path = repo / "out.json"
+    res = cli_runner.invoke(
+        app,
+        ["history", "scan", str(repo), "--format", "json", "--output", str(json_path)],
+    )
+    assert res.exit_code == EXIT_FINDINGS_BREACH_THRESHOLD
+
+    # Terminal output
+    res_term = cli_runner.invoke(app, ["history", "scan", str(repo)])
+    assert raw_key not in res_term.output
+    assert raw_tok not in res_term.output
+
+    # JSON report
+    report_content = json_path.read_text(encoding="utf-8")
+    assert raw_key not in report_content
+    assert raw_tok not in report_content

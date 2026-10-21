@@ -20,6 +20,7 @@ from caulk.action import (
     write_step_summary,
 )
 from caulk.cli import (
+    EXIT_EXECUTION_ERROR,
     EXIT_FINDINGS_BREACH_THRESHOLD,
     EXIT_SUCCESS_CLEAN,
     EXIT_USAGE_ERROR,
@@ -854,3 +855,134 @@ def test_action_input_validation_python_versions():
     for v in ["invalid", "3.x", "3.12; rm -rf /", "not_a_version"]:
         with pytest.raises(ValueError, match="Invalid python-version"):
             validate_action_inputs(".", "HIGH", "false", raw_python_version=v)
+
+
+def test_generate_step_summary_incomplete_status() -> None:
+    """Verify generate_step_summary renders incomplete status when is_complete is False."""
+    report_data = {
+        "caulk_version": "0.3.0",
+        "target_path": "repo",
+        "findings": [],
+        "errors": ["Skipped oversized blob 1234abcd (150000 bytes)"],
+        "summary": {
+            "is_complete": False,
+            "scan_mode": "git_history",
+            "commits_scanned": 5,
+            "blobs_scanned": 10,
+            "blobs_skipped_oversized": 1,
+            "blobs_skipped_binary": 0,
+            "files_skipped": 1,
+            "total_findings": 0,
+            "severity_counts": {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0},
+            "checks_not_performed": ["1 oversized blob(s) exceeded max size and were skipped."],
+        },
+    }
+
+    summary_md = generate_step_summary(report_data, threshold=Severity.HIGH)
+    assert "### Scan Result: ⚠️ Incomplete Inspection (Threshold: HIGH)" in summary_md
+    assert "Scan Result: ✅ Passed" not in summary_md
+    assert "The inspection is **incomplete** and cannot be considered clean." in summary_md
+    assert "1 oversized" in summary_md
+    assert "Skipped oversized blob" in summary_md
+
+
+def test_action_history_scan_incomplete_fails(tmp_path: Path) -> None:
+    """Verify action fails with code 3, error status, and step summary when history scan is incomplete."""
+    import stat
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.name", "Tester"], cwd=repo, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+    (repo / "clean.py").write_text("print('hello')\n")
+    subprocess.run(["git", "add", "clean.py"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, capture_output=True)
+
+    blob_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD:clean.py"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    obj_file = repo / ".git" / "objects" / blob_sha[:2] / blob_sha[2:]
+    obj_file.chmod(stat.S_IWRITE | stat.S_IREAD)
+    obj_file.write_bytes(b"CORRUPTED_OBJECT_DATA")
+
+    summary_file = tmp_path / "step_summary.md"
+    output_file = tmp_path / "action_output.txt"
+
+    env = {
+        "INPUT_PATH": str(repo),
+        "INPUT_SEVERITY_THRESHOLD": "HIGH",
+        "INPUT_CHECK_VULNS": "false",
+        "INPUT_SCAN_HISTORY": "true",
+        "GITHUB_STEP_SUMMARY": str(summary_file),
+        "GITHUB_OUTPUT": str(output_file),
+        "RUNNER_TEMP": str(tmp_path),
+    }
+
+    ret = run_action(environ=env)
+    assert ret == EXIT_EXECUTION_ERROR
+
+    outputs = output_file.read_text(encoding="utf-8")
+    assert "scan-result=error" in outputs
+    assert "scan-result=passed" not in outputs
+
+    summary = summary_file.read_text(encoding="utf-8")
+    assert "Scan Result: ✅ Passed" not in summary
+    assert "Incomplete" in summary or "Execution Error" in summary
+
+
+def test_action_history_scan_clean(tmp_path: Path) -> None:
+    """Verify action passes with code 0, passed status, and step summary when history scan is clean."""
+    repo = tmp_path / "clean_repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.name", "Tester"], cwd=repo, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+    (repo / "clean.py").write_text("print('clean code')\n")
+    subprocess.run(["git", "add", "clean.py"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "initial clean"], cwd=repo, check=True, capture_output=True
+    )
+
+    summary_file = tmp_path / "step_summary_clean.md"
+    output_file = tmp_path / "action_output_clean.txt"
+
+    env = {
+        "INPUT_PATH": str(repo),
+        "INPUT_SEVERITY_THRESHOLD": "HIGH",
+        "INPUT_CHECK_VULNS": "false",
+        "INPUT_SCAN_HISTORY": "true",
+        "GITHUB_STEP_SUMMARY": str(summary_file),
+        "GITHUB_OUTPUT": str(output_file),
+        "RUNNER_TEMP": str(tmp_path),
+    }
+
+    ret = run_action(environ=env)
+    assert ret == EXIT_SUCCESS_CLEAN
+
+    outputs = output_file.read_text(encoding="utf-8")
+    assert "scan-result=passed" in outputs
+    assert "findings-count=0" in outputs
+
+    summary = summary_file.read_text(encoding="utf-8")
+    assert "Scan Result: ✅ Passed" in summary

@@ -173,6 +173,11 @@ flowchart TD
 3. **Blob-Level Caching:** Because Git object SHAs uniquely represent file content, every blob SHA is inspected against secret rules at most once. Subsequent references to the same blob SHA across commits or branches are instant cache hits.
 4. **Parent Delta Deduplication:** Caulk compares findings in the destination blob against all parent blobs for that file in the commit. A finding is reported if and only if it was newly introduced or modified in that commit, eliminating phantom duplicates on merge commits.
 5. **Mandatory 5-Point Remediation:** All historical findings generate actionable guidance explaining that deletion does not invalidate a secret, requiring immediate provider rotation, log auditing, and safe post-rotation history rewriting.
+6. **Fail-Safe Completeness & Error Isolation:**
+   - Typed blob read outcomes (`BlobReadStatus`) distinguish successful reads, intentionally skipped binary files, skipped oversized blobs, missing objects, corrupt objects, and I/O errors.
+   - Any coverage gap, missing object, corrupt pack, skipped oversized blob, or traversal interruption sets `is_complete = False` and triggers non-zero exit code `3` (`EXIT_EXECUTION_ERROR`), preventing incomplete scans from falsely appearing clean.
+   - Background daemon threads drain `stderr` concurrently, preventing OS pipe buffer deadlocks.
+   - User-supplied refs are strictly validated against option injection (`--ref` cannot begin with `-`).
 
 ---
 

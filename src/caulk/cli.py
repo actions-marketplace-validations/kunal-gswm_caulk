@@ -20,7 +20,7 @@ from rich.table import Table
 
 from caulk import __version__
 from caulk.config import CaulkConfig, write_default_config
-from caulk.history.git import is_git_installed, is_git_repo, parse_blob_size
+from caulk.history.git import is_git_installed, is_git_repo, parse_blob_size, validate_git_ref
 from caulk.history.scanner import GitHistoryScanner
 from caulk.models import FindingCategory, Severity
 from caulk.reporting.json_report import generate_json_report, write_json_report
@@ -424,6 +424,13 @@ def history_scan_command(
         )
         raise typer.Exit(code=EXIT_USAGE_ERROR)
 
+    if ref is not None:
+        try:
+            validate_git_ref(ref)
+        except ValueError as err:
+            err_console.print(f"[bold red]Error:[/bold red] {err}")
+            raise typer.Exit(code=EXIT_USAGE_ERROR) from err
+
     try:
         fail_threshold = Severity.from_string(threshold)
     except ValueError as err:
@@ -472,8 +479,11 @@ def history_scan_command(
 
     if result.has_findings_above(fail_threshold):
         raise typer.Exit(code=EXIT_FINDINGS_BREACH_THRESHOLD)
-    else:
-        raise typer.Exit(code=EXIT_SUCCESS_CLEAN)
+
+    if not result.summary.is_complete or result.errors:
+        raise typer.Exit(code=EXIT_EXECUTION_ERROR)
+
+    raise typer.Exit(code=EXIT_SUCCESS_CLEAN)
 
 
 if __name__ == "__main__":

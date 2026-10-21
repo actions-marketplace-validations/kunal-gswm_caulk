@@ -259,6 +259,12 @@ class ScanSummary:
     commits_scanned: int = 0
     blobs_scanned: int = 0
     blobs_cached: int = 0
+    blobs_skipped_binary: int = 0
+    blobs_skipped_oversized: int = 0
+    blobs_skipped_missing: int = 0
+    blobs_skipped_corrupt: int = 0
+    blobs_skipped_error: int = 0
+    scan_scope: dict[str, Any] = field(default_factory=dict)
     refs_scanned: list[str] = field(default_factory=list)
     is_complete: bool = True
 

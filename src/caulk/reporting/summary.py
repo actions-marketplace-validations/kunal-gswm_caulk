@@ -161,6 +161,11 @@ def generate_step_summary(
     scan_mode = str(summary.get("scan_mode", "working_tree"))
     commits_scanned = summary.get("commits_scanned", 0)
     blobs_scanned = summary.get("blobs_scanned", 0)
+    blobs_skipped_oversized = summary.get("blobs_skipped_oversized", 0)
+    blobs_skipped_binary = summary.get("blobs_skipped_binary", 0)
+    scan_scope = summary.get("scan_scope", {})
+    is_complete = bool(summary.get("is_complete", True))
+    errors: list[str] = report_data.get("errors", [])
 
     raw_findings: list[dict[str, Any]] = report_data.get("findings", [])
 
@@ -181,7 +186,16 @@ def generate_step_summary(
     is_failed = len(breached) > 0
 
     if scan_mode == "git_history":
-        inspected_str = f"**Inspected:** {commits_scanned} commits, {blobs_scanned} blobs"
+        inspected_parts = [f"**Inspected:** {commits_scanned} commits, {blobs_scanned} blobs"]
+        if files_skipped > 0:
+            inspected_parts.append(
+                f"**Skipped:** {files_skipped} blobs ({blobs_skipped_oversized} oversized, {blobs_skipped_binary} binary)"
+            )
+        if scan_scope and scan_scope.get("full_history") is False:
+            inspected_parts.append("**Scope:** Partial history")
+        else:
+            inspected_parts.append("**Scope:** Full reachable history")
+        inspected_str = " | ".join(inspected_parts)
     else:
         inspected_str = f"**Inspected:** {files_scanned} files | **Skipped:** {files_skipped} files"
 
@@ -200,6 +214,16 @@ def generate_step_summary(
                 f"### Scan Result: ❌ Failed (Threshold: {threshold.value})",
                 "",
                 f"Found **{len(breached)}** finding(s) that meet or breach the **{threshold.value}** severity threshold.",
+                "",
+            ]
+        )
+    elif not is_complete:
+        lines.extend(
+            [
+                f"### Scan Result: ⚠️ Incomplete Inspection (Threshold: {threshold.value})",
+                "",
+                "The scan encountered coverage gaps, skipped oversized objects, or execution errors. "
+                "The inspection is **incomplete** and cannot be considered clean.",
                 "",
             ]
         )
@@ -322,6 +346,14 @@ def generate_step_summary(
         for check in raw_checks_not_performed:
             safe_check = escape_markdown_table_cell(str(check))
             lines.append(f"- {safe_check}")
+        lines.append("")
+
+    # Scan errors / coverage warnings if any
+    if errors:
+        lines.append("#### Scan Warnings & Diagnostic Notices")
+        for err in errors:
+            safe_err = escape_markdown_table_cell(str(err))
+            lines.append(f"- ⚠️ {safe_err}")
         lines.append("")
 
     # Security Disclaimer
