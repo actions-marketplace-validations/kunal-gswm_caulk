@@ -77,7 +77,21 @@ def make_git_repo(path: Path) -> Path:
 def git_commit(path: Path, message: str) -> str:
     """Stage all changes and commit, returning commit SHA."""
     subprocess.run(["git", "add", "-A"], cwd=path, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-m", message], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Caulk Tester",
+            "-c",
+            "user.email=tester@example.com",
+            "commit",
+            "-m",
+            message,
+        ],
+        cwd=path,
+        check=True,
+        capture_output=True,
+    )
     res = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True, check=True
     )
