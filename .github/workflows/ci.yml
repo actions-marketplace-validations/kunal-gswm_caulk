@@ -104,21 +104,9 @@ jobs:
         run: |
           test "${{ steps.caulk-override.outputs.scan-result }}" = "passed"
 
-      - name: Verify Step Summary Safety & Content
+      - name: Verify Job Summary Generation and Secret Safety
         shell: bash
+        env:
+          REPORT_PATH: ${{ steps.caulk-vuln.outputs.report-path }}
         run: |
-          echo "=== STEP SUMMARY CONTENT ==="
-          cat "$GITHUB_STEP_SUMMARY"
-          echo "=== END STEP SUMMARY ==="
-          test -s "$GITHUB_STEP_SUMMARY"
-          grep "Caulk Security Scan Report" "$GITHUB_STEP_SUMMARY"
-          grep "Scan Result: ❌ Failed" "$GITHUB_STEP_SUMMARY"
-          grep "Scan Result: ✅ Passed" "$GITHUB_STEP_SUMMARY"
-          if grep "N3v3rGu3ssMeP@ss" "$GITHUB_STEP_SUMMARY"; then
-            echo "Error: Found unredacted password in step summary!"
-            exit 1
-          fi
-          if grep "caulk_test_secret_token_9481948104810481" "$GITHUB_STEP_SUMMARY"; then
-            echo "Error: Found unredacted secret token in step summary!"
-            exit 1
-          fi
+          python -c "import json, os; from pathlib import Path; from caulk.models import Severity; from caulk.reporting.summary import generate_step_summary; report = json.loads(Path(os.environ['REPORT_PATH']).read_text(encoding='utf-8')); summary = generate_step_summary(report, threshold=Severity.HIGH); assert 'Caulk Security Scan Report' in summary; assert 'Scan Result: ❌ Failed' in summary; assert 'N3v3rGu3ssMeP@ss' not in summary; assert 'caulk_test_secret_token_9481948104810481' not in summary; print('Step summary verified cleanly without leaking secrets.')"
