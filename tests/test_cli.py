@@ -29,6 +29,16 @@ def test_cli_version(cli_runner: CliRunner):
     assert "caulk v0.1.0" in result.output
 
 
+def test_distribution_console_scripts():
+    """Verify both 'caulk' and 'caulk-security' console entrypoints are registered."""
+    import importlib.metadata
+
+    eps = importlib.metadata.entry_points(group="console_scripts")
+    caulk_eps = {ep.name: ep.value for ep in eps if "caulk" in ep.name}
+    assert caulk_eps.get("caulk") == "caulk.cli:app"
+    assert caulk_eps.get("caulk-security") == "caulk.cli:app"
+
+
 def test_cli_scan_clean(cli_runner: CliRunner, fixtures_dir: Path):
     clean_dir = fixtures_dir / "clean"
     result = cli_runner.invoke(app, ["scan", str(clean_dir)])

@@ -48,14 +48,22 @@ For complete rule documentation, see [docs/detection-coverage.md](docs/detection
 
 ---
 
-## 3. Installation
+## 3. Installation & Distribution
 
 Caulk requires **Python 3.11** or newer.
+
+> [!NOTE]
+> **Package Naming:** The official PyPI distribution package name is **`caulk-security`** (to prevent confusion with an unrelated historical package named `caulk`). The Python import package is `caulk`, and the CLI provides both the `caulk` command and the non-conflicting `caulk-security` executable.
 
 ### Standard Installation
 
 ```bash
-pip install caulk
+pip install caulk-security
+```
+
+Or using [`uv`](https://github.com/astral-sh/uv):
+```bash
+uv pip install caulk-security
 ```
 
 ### Development Installation (Editable)
@@ -81,6 +89,8 @@ uv pip install -e ".[dev]"
 
 ```bash
 caulk scan .
+# or using the non-conflicting alias:
+caulk-security scan .
 ```
 
 ### Scan a Specific Repository or Folder

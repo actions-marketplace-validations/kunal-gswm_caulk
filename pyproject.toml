@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "caulk"
+name = "caulk-security"
 version = "0.1.0"
 description = "Deterministic, open-source security checker for modern application repositories."
 readme = "README.md"
@@ -46,6 +46,7 @@ dev = [
 
 [project.scripts]
 caulk = "caulk.cli:app"
+caulk-security = "caulk.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/caulk"]
