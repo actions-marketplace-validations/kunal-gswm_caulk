@@ -1,0 +1,49 @@
+name: Bug Report
+description: Create a report to help us reproduce and fix a bug or unexpected behavior
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report an issue!
+        **Security notice:** If this report involves an exposed secret or potential security vulnerability in Caulk itself, please report it privately via [GitHub Private Vulnerability Reporting](https://github.com/kunal-gswm/caulk/security/advisories) as detailed in [SECURITY.md](https://github.com/kunal-gswm/caulk/blob/main/SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: Caulk Version
+      description: What version of Caulk are you running? (Run `caulk-security --version`)
+      placeholder: "e.g. caulk-security v0.3.0"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and Python version
+      placeholder: "e.g. Ubuntu 24.04, Python 3.12.3"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Clear steps or minimal synthetic code snippet to reproduce the behavior.
+      placeholder: |
+        1. Run 'caulk-security scan ...'
+        2. See error ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true

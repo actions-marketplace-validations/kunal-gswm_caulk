@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a Security Vulnerability
+    url: https://github.com/kunal-gswm/caulk/security/advisories
+    about: Please report security vulnerabilities privately via GitHub Private Vulnerability Reporting rather than public issues.

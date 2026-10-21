@@ -26,6 +26,7 @@ Create your rule in the appropriate module under `src/caulk/rules/`:
 - `secrets.py` for credential exposures (`SECxxx`).
 - `configuration.py` for deployment and container misconfigurations (`CFGxxx`).
 - `dependencies.py` for package manifest issues (`DEPxxx`).
+- `sast.py` for Python AST and taint analysis rules (`SASTxxx`).
 
 ### Example Rule Implementation
 

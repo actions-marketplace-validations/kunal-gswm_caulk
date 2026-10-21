@@ -1,0 +1,29 @@
+name: Rule or Feature Proposal
+description: Suggest a new security rule, CLI option, or enhancement for Caulk
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Caulk is a deterministic, offline-first security scanner without AI, telemetry, or external execution. Proposals should align with these core design principles.
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal Summary
+      description: What rule, CLI option, or improvement are you proposing?
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation / Use Case
+      description: Why is this rule or feature needed? What real-world security risk or workflow does it address?
+    validations:
+      required: true
+  - type: textarea
+    id: deterministic-design
+    attributes:
+      label: Deterministic Implementation Details
+      description: How can this be detected deterministically (e.g. regex signature, AST node structure, manifest format) with low false-positive rates?
+    validations:
+      required: false
