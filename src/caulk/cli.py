@@ -20,6 +20,8 @@ from rich.table import Table
 
 from caulk import __version__
 from caulk.config import CaulkConfig, write_default_config
+from caulk.history.git import is_git_installed, is_git_repo, parse_blob_size
+from caulk.history.scanner import GitHistoryScanner
 from caulk.models import FindingCategory, Severity
 from caulk.reporting.json_report import generate_json_report, write_json_report
 from caulk.reporting.terminal import render_terminal_report
@@ -45,6 +47,13 @@ rules_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(rules_app, name="rules")
+
+history_app = typer.Typer(
+    name="history",
+    help="Scan Git repository history for exposed secrets.",
+    no_args_is_help=True,
+)
+app.add_typer(history_app, name="history")
 
 console = Console()
 err_console = Console(stderr=True)
@@ -315,6 +324,156 @@ def init_command(
     except Exception as err:
         err_console.print(f"[bold red]Error creating configuration:[/bold red] {err}")
         raise typer.Exit(code=EXIT_EXECUTION_ERROR) from err
+
+
+@history_app.command(name="scan")
+def history_scan_command(
+    target: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to Git repository root.",
+            exists=False,
+        ),
+    ] = Path("."),
+    format: Annotated[
+        OutputFormat,
+        typer.Option(
+            "--format",
+            "-f",
+            help="Output report format (text or json).",
+        ),
+    ] = OutputFormat.TEXT,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Path to write the report file (e.g. caulk-history-report.json).",
+        ),
+    ] = None,
+    threshold: Annotated[
+        str,
+        typer.Option(
+            "--severity-threshold",
+            "-s",
+            help="Severity threshold to trigger non-zero exit code (CRITICAL, HIGH, MEDIUM, LOW, INFO).",
+        ),
+    ] = "LOW",
+    max_depth: Annotated[
+        int | None,
+        typer.Option(
+            "--max-depth",
+            help="Maximum commit depth to traverse.",
+        ),
+    ] = None,
+    since: Annotated[
+        str | None,
+        typer.Option(
+            "--since",
+            help="Scan commits more recent than a specific date or ref.",
+        ),
+    ] = None,
+    ref: Annotated[
+        str | None,
+        typer.Option(
+            "--ref",
+            help="Scan a specific ref or branch instead of all local refs.",
+        ),
+    ] = None,
+    max_blob_size: Annotated[
+        str,
+        typer.Option(
+            "--max-blob-size",
+            help="Maximum blob size to inspect (e.g. 2MB, 500KB, 1048576).",
+        ),
+    ] = "2MB",
+    exclude: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--exclude",
+            "-e",
+            help="Additional glob patterns or directory names to exclude.",
+        ),
+    ] = None,
+    no_progress: Annotated[
+        bool,
+        typer.Option(
+            "--no-progress",
+            help="Disable interactive progress display.",
+        ),
+    ] = False,
+) -> None:
+    """Scan Git repository history for exposed secrets and credentials."""
+    target_resolved = target.resolve()
+    if not target_resolved.exists():
+        err_console.print(f"[bold red]Error:[/bold red] Target path does not exist: {target}")
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
+    if not target_resolved.is_dir():
+        err_console.print(f"[bold red]Error:[/bold red] Target path is not a directory: {target}")
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
+
+    if not is_git_installed():
+        err_console.print(
+            "[bold red]Error:[/bold red] Git executable is not installed or not found in PATH."
+        )
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
+
+    if not is_git_repo(target_resolved):
+        err_console.print(
+            f"[bold red]Error:[/bold red] Target path is not a valid Git repository: {target}"
+        )
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
+
+    try:
+        fail_threshold = Severity.from_string(threshold)
+    except ValueError as err:
+        err_console.print(f"[bold red]Error:[/bold red] {err}")
+        raise typer.Exit(code=EXIT_USAGE_ERROR) from err
+
+    try:
+        blob_size_bytes = parse_blob_size(max_blob_size)
+    except Exception as err:
+        err_console.print(f"[bold red]Error parsing --max-blob-size:[/bold red] {err}")
+        raise typer.Exit(code=EXIT_USAGE_ERROR) from err
+
+    try:
+        scanner = GitHistoryScanner(
+            repo_path=target_resolved,
+            max_blob_size=blob_size_bytes,
+            max_depth=max_depth,
+            since=since,
+            ref=ref,
+            extra_exclusions=exclude,
+        )
+        result = scanner.scan()
+    except Exception as err:
+        err_console.print(f"[bold red]History Scanner Execution Error:[/bold red] {err}")
+        raise typer.Exit(code=EXIT_EXECUTION_ERROR) from err
+
+    if format == OutputFormat.JSON:
+        json_str = generate_json_report(result)
+        if output:
+            try:
+                write_json_report(result, output)
+            except Exception as err:
+                err_console.print(f"[bold red]Error writing output file:[/bold red] {err}")
+                raise typer.Exit(code=EXIT_EXECUTION_ERROR) from err
+        else:
+            sys.stdout.write(json_str + "\n")
+            sys.stdout.flush()
+    else:
+        render_terminal_report(result, console=console)
+        if output:
+            try:
+                write_json_report(result, output)
+            except Exception as err:
+                err_console.print(f"[bold red]Error writing output file:[/bold red] {err}")
+                raise typer.Exit(code=EXIT_EXECUTION_ERROR) from err
+
+    if result.has_findings_above(fail_threshold):
+        raise typer.Exit(code=EXIT_FINDINGS_BREACH_THRESHOLD)
+    else:
+        raise typer.Exit(code=EXIT_SUCCESS_CLEAN)
 
 
 if __name__ == "__main__":

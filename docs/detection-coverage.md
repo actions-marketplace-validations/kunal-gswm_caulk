@@ -36,18 +36,25 @@ Caulk emphasizes high-confidence, deterministic detections. This document outlin
 | `DEP002` | Application Manifest Present Without Corresponding Lockfile | `INFO` | `HIGH` | `package.json` | Flags projects containing dependency manifests without a corresponding committed lockfile (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`). |
 | `DEP003` | Known Vulnerability in Dependency (OSV Advisory) | `CRITICAL` / `HIGH` | `CONFIRMED` | Lockfiles / Pinned manifests | *(Optional)* Queries OSV.dev batch API for verified CVE/GHSA advisories against exact pinned package versions when run with `--check-vulns`. |
 
+### D. Git History Secret Scanning (`HISTORICAL`) — Added in v0.3.0
+
+Caulk includes a dedicated Git history inspection subsystem (`caulk-security history scan`) reusing the deterministic secret rules (`SEC001`–`SEC008`) across all reachable commits in the repository:
+
+- **Attribution:** Maps findings directly to commit SHA, author name/email, author timestamp (ISO 8601), and commit message subject.
+- **Deduplication:** Uses parent-blob comparison to report findings exclusively in the commit where the secret was introduced or modified.
+- **Deleted & Replaced Secrets:** Detects secrets even if removed, renamed, or replaced with placeholders in subsequent commits.
+- **5-Point Remediation:** Generates tailored, actionable 5-step guidance (historical exposure, deletion ineffectiveness, immediate provider rotation, access log auditing, and safe post-rotation history rewriting).
+
 ---
 
 ## 2. Planned Checks (Future Milestones)
 
 The following capabilities are architected for upcoming releases and will be added under the same deterministic rule interface:
 
-1. **Git Commit History Scanning:**
-   - Scanning unreachable or historic Git commits for revoked or lingering secrets before pushing to public remotes.
-2. **Lockfile Parsing Extensions:**
+1. **Lockfile Parsing Extensions:**
    - Full parser for `yarn.lock` (v1 and v2 Berry) and `pnpm-lock.yaml`.
    - Python `poetry.lock` and `Pipfile.lock` deep parsing.
-3. **Advanced Infrastructure-as-Code (IaC) Rules:**
+2. **Advanced Infrastructure-as-Code (IaC) Rules:**
    - Terraform / OpenTofu security misconfiguration checks (unencrypted S3 buckets, open security groups `0.0.0.0/0`).
    - GitHub Actions workflow analysis (unpinned actions, dangerous `pull_request_target` triggers, secret exfiltration vectors).
 4. **Targeted Semantic AST Checks:**

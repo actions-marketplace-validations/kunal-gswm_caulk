@@ -158,6 +158,9 @@ def generate_step_summary(
 
     sev_counts = summary.get("severity_counts", {})
     raw_checks_not_performed = summary.get("checks_not_performed", [])
+    scan_mode = str(summary.get("scan_mode", "working_tree"))
+    commits_scanned = summary.get("commits_scanned", 0)
+    blobs_scanned = summary.get("blobs_scanned", 0)
 
     raw_findings: list[dict[str, Any]] = report_data.get("findings", [])
 
@@ -177,12 +180,16 @@ def generate_step_summary(
 
     is_failed = len(breached) > 0
 
+    if scan_mode == "git_history":
+        inspected_str = f"**Inspected:** {commits_scanned} commits, {blobs_scanned} blobs"
+    else:
+        inspected_str = f"**Inspected:** {files_scanned} files | **Skipped:** {files_skipped} files"
+
     lines: list[str] = [
         "## Caulk Security Scan Report",
         "",
         f"> **Deterministic Security Inspection** — Caulk `v{caulk_version}`  ",
-        f"> **Target:** {target_code} | **Inspected:** {files_scanned} files | "
-        f"**Skipped:** {files_skipped} files | **Duration:** {duration_seconds}s",
+        f"> **Target:** {target_code} | {inspected_str} | **Duration:** {duration_seconds}s",
         "",
     ]
 
@@ -248,7 +255,16 @@ def generate_step_summary(
             cat_str = str(f.get("category", "UNKNOWN"))
             file_path = str(f.get("file_path", ""))
             line_no = f.get("line_number")
-            loc_str = f"{file_path}:{line_no}" if line_no is not None else file_path
+            commit_sha = f.get("commit_sha")
+            if commit_sha:
+                short_sha = str(commit_sha)[:8]
+                loc_str = (
+                    f"{file_path}:{line_no} ({short_sha})"
+                    if line_no is not None
+                    else f"{file_path} ({short_sha})"
+                )
+            else:
+                loc_str = f"{file_path}:{line_no}" if line_no is not None else file_path
             title_str = str(f.get("title", ""))
 
             safe_rule = format_table_code_cell(rule_id_str)
@@ -272,7 +288,10 @@ def generate_step_summary(
         # Local remediation command inside fenced block
         escaped_cmd_path = target_path.replace('"', '\\"')
         cmd_target_arg = f'"{escaped_cmd_path}"' if " " in target_path else target_path
-        remediation_cmd = f"caulk-security scan {cmd_target_arg}"
+        if scan_mode == "git_history":
+            remediation_cmd = f"caulk-security history scan {cmd_target_arg}"
+        else:
+            remediation_cmd = f"caulk-security scan {cmd_target_arg}"
 
         runs = _BACKTICK_RUN_RE.findall(remediation_cmd)
         cmd_fence_len = max(3, max((len(r) for r in runs), default=0) + 1)

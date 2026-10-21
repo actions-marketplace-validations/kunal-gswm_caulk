@@ -8,7 +8,15 @@ from pathlib import Path
 
 from rich.console import Console
 
-from caulk.models import Finding, ScanResult, ScanSummary, Severity
+from caulk.models import (
+    Confidence,
+    Finding,
+    FindingCategory,
+    FindingStatus,
+    ScanResult,
+    ScanSummary,
+    Severity,
+)
 from caulk.reporting.json_report import generate_json_report, write_json_report
 from caulk.reporting.terminal import render_terminal_report
 
@@ -89,3 +97,58 @@ def test_json_report_generation(sample_finding: Finding, tmp_path: Path):
     write_json_report(result, out_file)
     assert out_file.exists()
     assert json.loads(out_file.read_text(encoding="utf-8")) == parsed
+
+
+def test_terminal_report_historical():
+    """Verify terminal renderer formats historical findings with commit coordinates."""
+    output = StringIO()
+    test_console = Console(file=output, color_system=None, width=120)
+
+    finding = Finding(
+        rule_id="SEC002",
+        title="AWS Access Key ID Detected",
+        description="Key found in past commit",
+        severity=Severity.CRITICAL,
+        confidence=Confidence.HIGH,
+        category=FindingCategory.SECRET,
+        file_path="src/old_auth.py",
+        line_number=10,
+        evidence="AWS Key detected: AKIA************MPLE",
+        impact="Compromise",
+        remediation="1. HISTORICAL EXPOSURE: Rotate now.",
+        status=FindingStatus.HISTORICAL,
+        commit_sha="1234567890abcdef1234567890abcdef12345678",
+        commit_author="Jane Doe <jane@example.com>",
+        commit_timestamp="2026-10-21T10:00:00Z",
+        commit_subject="Add old auth config",
+    )
+
+    summary = ScanSummary(
+        scan_mode="git_history",
+        commits_scanned=15,
+        blobs_scanned=45,
+        blobs_cached=10,
+        refs_scanned=["refs/heads/main", "HEAD"],
+        total_findings=1,
+        severity_counts={Severity.CRITICAL.value: 1},
+    )
+
+    result = ScanResult(
+        caulk_version="0.2.0",
+        target_path="/test/repo",
+        findings=[finding],
+        summary=summary,
+    )
+
+    render_terminal_report(result, console=test_console)
+    text = output.getvalue()
+
+    assert "Commits inspected: 15" in text
+    assert "Blobs inspected: 45" in text
+    assert "Blobs cached: 10" in text
+    assert "Refs inspected: refs/heads/main, HEAD" in text
+    assert "[HISTORICAL]" in text
+    assert "Commit: 12345678 (1234567890abcdef1234567890abcdef12345678)" in text
+    assert "Author: Jane Doe <jane@example.com>" in text
+    assert "Date:   2026-10-21T10:00:00Z" in text
+    assert "Subject: Add old auth config" in text

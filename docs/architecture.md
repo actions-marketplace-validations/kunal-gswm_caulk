@@ -139,7 +139,44 @@ flowchart TD
 
 ---
 
-## 4. GUI & Extension Readiness
+## 4. Git History Secret Scanning Architecture (`src/caulk/history/`)
+
+Added in v0.3.0, the Git history scanning subsystem detects credentials committed to Git history across reachable branches, tags, and commits without altering the working directory or checking out branches.
+
+```mermaid
+flowchart TD
+    CLI[caulk-security history scan] --> HistoryScanner[GitHistoryScanner: history/scanner.py]
+    HistoryScanner --> GitLog[stream_git_log: git log -c --raw --root]
+    GitLog --> Diffs[Stream CommitDiff Entries]
+
+    subgraph BlobInspection ["Blob Batch Streaming & Caching"]
+        Diffs --> BlobReader[GitBlobReader: git cat-file --batch]
+        BlobReader --> BinaryFilter[Null Byte Binary Check]
+        BlobReader --> SizeCheck[max_blob_size Ceiling]
+        BlobReader --> BlobCache[Blob SHA In-Memory Cache]
+    end
+
+    subgraph DeltaEngine ["Parent-Delta Attribution Engine"]
+        BlobCache --> SecretRules[Rules SEC001-SEC008]
+        SecretRules --> ParentDiff[Compare with Parent src_blob_shas]
+        ParentDiff --> AttributedFinding[Attribute to Commit SHA / Author / Timestamp]
+    end
+
+    AttributedFinding --> Remediation[Generate 5-Point Historical Remediation]
+    Remediation --> Fingerprint[SHA-256 Fingerprint with Commit SHA]
+    Fingerprint --> Results[ScanResult with Historical Summary]
+```
+
+### Key Architectural Principles
+1. **Zero Working-Tree Modification:** Traversal operates exclusively via low-level Git object inspection (`git log -c --raw` and `git cat-file --batch`). No commits are checked out, no files on disk are touched, and HEAD never moves.
+2. **Subprocess Isolation:** Git interactions strictly use argument lists (e.g. `["git", "-C", path, ...]`). Shell interpreters are never invoked (`shell=False`), preventing command injection.
+3. **Blob-Level Caching:** Because Git object SHAs uniquely represent file content, every blob SHA is inspected against secret rules at most once. Subsequent references to the same blob SHA across commits or branches are instant cache hits.
+4. **Parent Delta Deduplication:** Caulk compares findings in the destination blob against all parent blobs for that file in the commit. A finding is reported if and only if it was newly introduced or modified in that commit, eliminating phantom duplicates on merge commits.
+5. **Mandatory 5-Point Remediation:** All historical findings generate actionable guidance explaining that deletion does not invalidate a secret, requiring immediate provider rotation, log auditing, and safe post-rotation history rewriting.
+
+---
+
+## 5. GUI & Extension Readiness
 
 The CLI, rule engine, discovery walker, and reporting layers are strictly decoupled:
 - All business logic lives in `caulk.scanner.CaulkScanner`, `caulk.discovery`, and `caulk.models`.

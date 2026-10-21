@@ -18,6 +18,10 @@ inputs:
     description: 'Enable outbound network query to OSV database for dependency vulnerabilities'
     required: false
     default: 'false'
+  scan-history:
+    description: 'Scan Git repository history for exposed secrets instead of working tree'
+    required: false
+    default: 'false'
   python-version:
     description: 'Supported Python version to use for running Caulk (3.11, 3.12, 3.13)'
     required: false
@@ -43,6 +47,7 @@ runs:
         INPUT_PYTHON_VERSION: ${{ inputs.python-version }}
         INPUT_SEVERITY_THRESHOLD: ${{ inputs.severity-threshold }}
         INPUT_CHECK_VULNS: ${{ inputs.check-vulns }}
+        INPUT_SCAN_HISTORY: ${{ inputs.scan-history }}
       run: |
         VERSION="$(echo "${INPUT_PYTHON_VERSION}" | tr -d '[:space:]')"
         if [[ ! "${VERSION}" =~ ^3\.(11|12|13)(\..*)?$ ]]; then
@@ -68,6 +73,15 @@ runs:
             ;;
         esac
 
+        HIST="$(echo "${INPUT_SCAN_HISTORY}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+        case "${HIST}" in
+          true|false|1|0|yes|no) ;;
+          *)
+            echo "::error::Invalid scan-history '${INPUT_SCAN_HISTORY}'. Allowed: true, false, 1, 0, yes, no." >&2
+            exit 1
+            ;;
+        esac
+
     - name: Set up Python runtime
       uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
       with:
@@ -87,6 +101,7 @@ runs:
         INPUT_PATH: ${{ inputs.path }}
         INPUT_SEVERITY_THRESHOLD: ${{ inputs.severity-threshold }}
         INPUT_CHECK_VULNS: ${{ inputs.check-vulns }}
+        INPUT_SCAN_HISTORY: ${{ inputs.scan-history }}
         INPUT_PYTHON_VERSION: ${{ inputs.python-version }}
         ACTION_PATH: ${{ github.action_path }}
         GITHUB_WORKSPACE: ${{ github.workspace }}

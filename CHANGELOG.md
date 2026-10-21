@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.0] - Unreleased
+
+### Added
+- **Git History Secret Scanner (`caulk-security history scan`):**
+  - Dedicated CLI command to scan historical Git commits for exposed credentials across reachable branches, tags, and HEAD.
+  - Streaming commit metadata and file diffs using `git log -c --raw --no-renames --root --no-abbrev`.
+  - Batch blob extraction via persistent `git cat-file --batch` process with guaranteed stream synchronization, memory bounds, and binary null-byte filtering.
+  - Full attribution of historical credentials to the introducing commit SHA, author name/email, author timestamp (ISO 8601), and commit subject.
+  - Detection of secrets even if deleted, renamed, or replaced with placeholders in subsequent commits.
+  - In-memory blob-level caching (`blob_sha -> findings template`) eliminating redundant regex inspection on identical Git object hashes across commits.
+  - Parent-blob delta comparison ensuring secrets are reported exclusively for the commit where they were introduced or modified, preventing phantom duplicates on merge commits or branching workflows.
+  - Full handling of merge conflict resolutions (evil merges) and multiple independent root commits (orphan branches).
+  - Mandatory 5-point remediation guidance on all historical findings (exposure window, deletion ineffectiveness, immediate provider rotation, access log auditing, and safe post-rotation history rewriting).
+  - Configurable scan limits: `--severity-threshold`, `--max-depth`, `--since`, `--ref`, `--max-blob-size`, `--exclude`, and `--no-progress`.
+  - Deterministic exit codes: `0` for clean, `1` for findings at or above threshold, `2` for usage errors.
+- **GitHub Action History Scanning Support:**
+  - Added optional `scan-history: 'false'` action input allowing CI workflows to run historical secret scanning instead of working-tree inspection.
+  - Extended GitHub Step Summary reporting with commit SHA coordinates and history scan metrics.
+- **Test Suite Expansion:**
+  - Added 19 comprehensive unit and integration tests (`tests/test_history.py`) covering all Git topologies (initial commit, deleted secrets, replaced secrets, merge commits, tags, orphan branches, duplicate blobs, oversized blobs, corrupt objects, and secret redaction).
+
+---
+
 ## [0.2.0] - 2026-10-21
 
 ### Added

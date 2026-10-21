@@ -108,6 +108,7 @@ class FindingStatus(StrEnum):
     DETECTED = "DETECTED"
     SUPPRESSED = "SUPPRESSED"
     VERIFIED = "VERIFIED"
+    HISTORICAL = "HISTORICAL"
 
 
 def normalize_repo_path(path: str | Path | None) -> str:
@@ -126,6 +127,7 @@ def compute_fingerprint(
     file_path: str | Path | None,
     line_number: int | None,
     identity_hint: str = "",
+    commit_sha: str | None = None,
 ) -> str:
     """Compute a deterministic, stable fingerprint for finding deduplication.
 
@@ -134,6 +136,8 @@ def compute_fingerprint(
     normalized_path = normalize_repo_path(file_path)
     line_str = str(line_number) if line_number is not None else "0"
     raw = f"{rule_id}:{normalized_path}:{line_str}:{identity_hint.strip()}"
+    if commit_sha:
+        raw = f"{raw}:{commit_sha.strip()}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
@@ -156,6 +160,15 @@ class Finding:
     fingerprint: str = ""
     detected_by: str = "caulk-engine"
     status: FindingStatus = FindingStatus.DETECTED
+    commit_sha: str | None = None
+    commit_timestamp: str | None = None
+    commit_author: str | None = None
+    commit_subject: str | None = None
+
+    @property
+    def is_historical(self) -> bool:
+        """Whether this finding was detected in historical Git commits."""
+        return self.status == FindingStatus.HISTORICAL or self.commit_sha is not None
 
     def __post_init__(self) -> None:
         # Enforce normalized file path and compute fingerprint if not provided
@@ -168,6 +181,7 @@ class Finding:
                 file_path=normalized,
                 line_number=self.line_number,
                 identity_hint=self.title,
+                commit_sha=self.commit_sha,
             )
             object.__setattr__(self, "fingerprint", fp)
 
@@ -189,6 +203,10 @@ class Finding:
             "fingerprint": self.fingerprint,
             "detected_by": self.detected_by,
             "status": self.status.value,
+            "commit_sha": self.commit_sha,
+            "commit_timestamp": self.commit_timestamp,
+            "commit_author": self.commit_author,
+            "commit_subject": self.commit_subject,
         }
 
     @classmethod
@@ -210,6 +228,10 @@ class Finding:
             fingerprint=str(data.get("fingerprint", "")),
             detected_by=str(data.get("detected_by", "caulk-engine")),
             status=FindingStatus(str(data.get("status", "DETECTED"))),
+            commit_sha=data.get("commit_sha"),
+            commit_timestamp=data.get("commit_timestamp"),
+            commit_author=data.get("commit_author"),
+            commit_subject=data.get("commit_subject"),
         )
 
 
@@ -233,6 +255,12 @@ class ScanSummary:
     )
     ecosystems_detected: list[str] = field(default_factory=list)
     checks_not_performed: list[str] = field(default_factory=list)
+    scan_mode: str = "working_tree"
+    commits_scanned: int = 0
+    blobs_scanned: int = 0
+    blobs_cached: int = 0
+    refs_scanned: list[str] = field(default_factory=list)
+    is_complete: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

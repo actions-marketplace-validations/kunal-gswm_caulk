@@ -117,6 +117,21 @@ jobs:
         run: |
           test "${{ steps.caulk-bad-python.outcome }}" = "failure"
 
+      - name: Run Caulk Action with History Scanning
+        id: caulk-history
+        uses: ./
+        continue-on-error: true
+        with:
+          path: .
+          severity-threshold: HIGH
+          scan-history: true
+
+      - name: Verify History Action Outcome & Outputs
+        shell: bash
+        run: |
+          test -f "${{ steps.caulk-history.outputs.report-path }}"
+          test "${{ steps.caulk-history.outputs.findings-count }}" != "0"
+
       - name: Verify Job Summary Generation and Secret Safety
         shell: bash
         env:

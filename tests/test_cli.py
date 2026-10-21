@@ -21,6 +21,19 @@ def test_cli_help(cli_runner: CliRunner):
     assert "scan" in result.output
     assert "init" in result.output
     assert "rules" in result.output
+    assert "history" in result.output
+
+
+def test_cli_history_help(cli_runner: CliRunner):
+    result = cli_runner.invoke(app, ["history", "--help"])
+    assert result.exit_code == EXIT_SUCCESS_CLEAN
+    assert "scan" in result.output
+
+    res_scan = cli_runner.invoke(app, ["history", "scan", "--help"])
+    assert res_scan.exit_code == EXIT_SUCCESS_CLEAN
+    assert "--max-depth" in res_scan.output
+    assert "--severity-threshold" in res_scan.output
+    assert "--max-blob-size" in res_scan.output
 
 
 def test_cli_version(cli_runner: CliRunner):

@@ -69,3 +69,6 @@ caulk-report*.txt
 .env.*
 !.env.example
 !tests/fixtures/**
+
+# Lockfiles created locally by uv during build
+uv.lock

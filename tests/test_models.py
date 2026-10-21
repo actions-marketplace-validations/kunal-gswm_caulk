@@ -11,6 +11,7 @@ from caulk.models import (
     Confidence,
     Finding,
     FindingCategory,
+    FindingStatus,
     ScanResult,
     ScanSummary,
     Severity,
@@ -128,3 +129,71 @@ def test_scan_result_json_serialization(sample_finding: Finding):
     assert parsed["caulk_version"] == "0.2.0"
     assert len(parsed["findings"]) == 1
     assert parsed["summary"]["total_findings"] == 1
+
+
+def test_historical_finding_model_and_fingerprint():
+    """Verify historical finding properties, fingerprint variation by commit, and round-trip fidelity."""
+    fp_c1 = compute_fingerprint(
+        "SEC001", "src/key.pem", 1, "Private Key", commit_sha="abcdef1234567890"
+    )
+    fp_c2 = compute_fingerprint(
+        "SEC001", "src/key.pem", 1, "Private Key", commit_sha="9876543210fedcba"
+    )
+    fp_no_commit = compute_fingerprint("SEC001", "src/key.pem", 1, "Private Key")
+
+    assert fp_c1 != fp_c2
+    assert fp_c1 != fp_no_commit
+
+    finding = Finding(
+        rule_id="SEC001",
+        title="Private Key Exposed",
+        description="Key in history",
+        severity=Severity.CRITICAL,
+        confidence=Confidence.CONFIRMED,
+        category=FindingCategory.SECRET,
+        file_path="src/key.pem",
+        line_number=1,
+        evidence="-----BEGIN PRIVATE KEY----- [REDACTED]",
+        impact="Compromise",
+        remediation="Rotate",
+        status=FindingStatus.HISTORICAL,
+        commit_sha="abcdef1234567890",
+        commit_timestamp="2026-10-21T10:00:00Z",
+        commit_author="Dev <dev@example.com>",
+        commit_subject="Add key",
+    )
+
+    assert finding.is_historical is True
+    assert finding.status == FindingStatus.HISTORICAL
+    assert finding.commit_sha == "abcdef1234567890"
+
+    d = finding.to_dict()
+    assert d["status"] == "HISTORICAL"
+    assert d["commit_sha"] == "abcdef1234567890"
+    assert d["commit_author"] == "Dev <dev@example.com>"
+
+    reconstructed = Finding.from_dict(d)
+    assert reconstructed.is_historical is True
+    assert reconstructed.commit_sha == finding.commit_sha
+    assert reconstructed.commit_timestamp == finding.commit_timestamp
+    assert reconstructed.commit_author == finding.commit_author
+    assert reconstructed.commit_subject == finding.commit_subject
+    assert reconstructed.fingerprint == finding.fingerprint
+
+
+def test_scan_summary_historical_fields():
+    """Verify ScanSummary historical metadata defaults and serialization."""
+    summary = ScanSummary(
+        scan_mode="git_history",
+        commits_scanned=42,
+        blobs_scanned=100,
+        blobs_cached=25,
+        refs_scanned=["refs/heads/main", "HEAD"],
+    )
+    d = summary.to_dict()
+    assert d["scan_mode"] == "git_history"
+    assert d["commits_scanned"] == 42
+    assert d["blobs_scanned"] == 100
+    assert d["blobs_cached"] == 25
+    assert d["refs_scanned"] == ["refs/heads/main", "HEAD"]
+    assert d["is_complete"] is True

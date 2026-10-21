@@ -63,7 +63,8 @@ def validate_action_inputs(
     raw_check_vulns: str | None,
     raw_python_version: str | None = None,
     workspace_root: str | None = None,
-) -> tuple[Path, Severity, bool]:
+    raw_scan_history: str | None = None,
+) -> tuple[Path, Severity, bool, bool]:
     """Validate all inputs supplied to the GitHub Action."""
     # 1. Target path resolution
     target_path = resolve_target_path(raw_path, workspace_root)
@@ -81,7 +82,10 @@ def validate_action_inputs(
     # 3. Advisory check flag
     check_vulns = parse_action_boolean(raw_check_vulns, "check-vulns")
 
-    # 4. Python version input validation (restricted to tested series: 3.11, 3.12, 3.13)
+    # 4. Scan history flag
+    scan_history = parse_action_boolean(raw_scan_history, "scan-history")
+
+    # 5. Python version input validation (restricted to tested series: 3.11, 3.12, 3.13)
     if raw_python_version:
         v_str = raw_python_version.strip()
         parts = v_str.split(".")
@@ -101,7 +105,7 @@ def validate_action_inputs(
             f"Unsupported Python runtime '{sys.version}'. Caulk requires Python 3.11 or newer."
         )
 
-    return target_path, threshold, check_vulns
+    return target_path, threshold, check_vulns, scan_history
 
 
 def write_step_summary(summary_md: str, summary_file: Path | str | None = None) -> None:
@@ -154,6 +158,7 @@ def run_action(
     raw_path = env.get("INPUT_PATH", ".")
     raw_threshold = env.get("INPUT_SEVERITY_THRESHOLD", "HIGH")
     raw_check_vulns = env.get("INPUT_CHECK_VULNS", "false")
+    raw_scan_history = env.get("INPUT_SCAN_HISTORY", "false")
     raw_python_version = env.get("INPUT_PYTHON_VERSION", "3.12")
     workspace = env.get("GITHUB_WORKSPACE")
 
@@ -162,12 +167,13 @@ def run_action(
 
     # 1. Input Validation
     try:
-        target_path, threshold, check_vulns = validate_action_inputs(
+        target_path, threshold, check_vulns, scan_history = validate_action_inputs(
             raw_path=raw_path,
             raw_threshold=raw_threshold,
             raw_check_vulns=raw_check_vulns,
             raw_python_version=raw_python_version,
             workspace_root=workspace,
+            raw_scan_history=raw_scan_history,
         )
     except Exception as err:
         err_msg = f"Input validation error: {err}"
@@ -200,24 +206,37 @@ def run_action(
     runner_temp = env.get("RUNNER_TEMP") or tempfile.gettempdir()
     report_file = Path(runner_temp) / f"caulk-report-{uuid.uuid4().hex[:8]}.json"
 
-    # 4. Resolve CLI Executable
+    # 4. Resolve CLI Executable and build command
     cli_exe = shutil.which("caulk-security")
     cmd: list[str] = [cli_exe] if cli_exe else [sys.executable, "-m", "caulk.cli"]
-    cmd.extend(
-        [
-            "scan",
-            str(target_path),
-            "--severity-threshold",
-            threshold.value,
-            "--output",
-            str(report_file),
-        ]
-    )
 
-    if check_vulns:
-        cmd.append("--check-vulns")
+    if scan_history:
+        cmd.extend(
+            [
+                "history",
+                "scan",
+                str(target_path),
+                "--severity-threshold",
+                threshold.value,
+                "--output",
+                str(report_file),
+            ]
+        )
     else:
-        cmd.append("--offline")
+        cmd.extend(
+            [
+                "scan",
+                str(target_path),
+                "--severity-threshold",
+                threshold.value,
+                "--output",
+                str(report_file),
+            ]
+        )
+        if check_vulns:
+            cmd.append("--check-vulns")
+        else:
+            cmd.append("--offline")
 
     # 5. Execute Scanner Subprocess
     try:

@@ -122,13 +122,17 @@ def test_resolve_target_path(tmp_path: Path):
 def test_validate_action_inputs():
     """Verify input validation rules and error messages."""
     # Valid default inputs
-    target, thresh, check_v = validate_action_inputs(".", "HIGH", "false")
+    target, thresh, check_v, scan_h = validate_action_inputs(".", "HIGH", "false")
     assert thresh == Severity.HIGH
     assert check_v is False
+    assert scan_h is False
 
-    # Valid custom severity (case-insensitive)
-    _, thresh_crit, _ = validate_action_inputs(".", "critical", "false")
+    # Valid custom severity (case-insensitive) and scan-history
+    _, thresh_crit, _, scan_h_true = validate_action_inputs(
+        ".", "critical", "false", raw_scan_history="true"
+    )
     assert thresh_crit == Severity.CRITICAL
+    assert scan_h_true is True
 
     # Invalid severity
     with pytest.raises(ValueError, match="Invalid severity-threshold 'INVALID'"):
@@ -137,6 +141,10 @@ def test_validate_action_inputs():
     # Invalid check-vulns
     with pytest.raises(ValueError, match="Invalid boolean value 'not_a_bool'"):
         validate_action_inputs(".", "HIGH", "not_a_bool")
+
+    # Invalid scan-history
+    with pytest.raises(ValueError, match="Invalid boolean value 'invalid_history'"):
+        validate_action_inputs(".", "HIGH", "false", raw_scan_history="invalid_history")
 
     # Unsupported Python version input
     with pytest.raises(ValueError, match="Unsupported Python version '3.9'"):
@@ -834,7 +842,7 @@ def test_action_input_validation_python_versions():
     """Verify Python version input validation rejects unsupported or malformed versions."""
     # Supported and tested versions
     for v in ["3.11", "3.12", "3.13", "3.11.9", "3.12.1", "3.13.0"]:
-        _, thresh, _ = validate_action_inputs(".", "HIGH", "false", raw_python_version=v)
+        _, thresh, _, _ = validate_action_inputs(".", "HIGH", "false", raw_python_version=v)
         assert thresh == Severity.HIGH
 
     # Unsupported Python versions (outside explicitly tested 3.11, 3.12, 3.13)

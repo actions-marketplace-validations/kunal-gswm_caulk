@@ -97,6 +97,31 @@ caulk-security scan .
 caulk-security scan ./my-project
 ```
 
+### Scan Git History for Committed Credentials (v0.3.0)
+
+Caulk traverses reachable Git history across local branches, tags, and HEAD to catch credentials committed in the past—even if they were deleted or replaced in subsequent commits:
+
+```bash
+# Scan Git history of the current repository:
+caulk-security history scan .
+
+# Scan Git history of a specified repository path:
+caulk-security history scan ./my-project
+
+# Limit commit depth or scan since a specific date:
+caulk-security history scan . --max-depth 100
+caulk-security history scan . --since "2024-01-01"
+
+# Scan a specific branch or ref instead of all local refs:
+caulk-security history scan . --ref main
+
+# Export machine-readable JSON history report:
+caulk-security history scan . --format json --output history-report.json
+
+# Adjust blob size limit (default 2MB) or exclude specific paths:
+caulk-security history scan . --max-blob-size 500KB --exclude "tests/*"
+```
+
 ### Machine-Readable JSON Output
 
 ```bash
@@ -298,6 +323,7 @@ jobs:
           path: .
           severity-threshold: HIGH
           check-vulns: false
+          scan-history: false
           python-version: "3.12"
 ```
 
@@ -308,6 +334,7 @@ jobs:
 | `path` | Path to repository or subfolder to scan | No | `.` | Directory path relative to `GITHUB_WORKSPACE` |
 | `severity-threshold` | Minimum severity level to fail the job | No | `HIGH` | `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO` |
 | `check-vulns` | Enable outbound queries to OSV for package CVEs | No | `false` | `true`, `false` |
+| `scan-history` | Scan Git repository history for exposed secrets | No | `false` | `true`, `false` |
 | `python-version` | Python runtime version for scanner environment | No | `3.12` | `3.11`, `3.12`, `3.13` |
 
 ### Action Outputs

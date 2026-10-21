@@ -46,13 +46,24 @@ def render_terminal_report(result: ScanResult, console: Console | None = None) -
     )
 
     # Discovered ecosystems & summary metadata
-    ecosystems_str = ", ".join(result.summary.ecosystems_detected) or "generic"
-    con.print(
-        f"[dim]Files inspected:[/dim] [bold]{result.summary.files_scanned}[/bold]  "
-        f"[dim]Files skipped:[/dim] [bold]{result.summary.files_skipped}[/bold]  "
-        f"[dim]Ecosystems:[/dim] [bold cyan]{ecosystems_str}[/bold cyan]  "
-        f"[dim]Duration:[/dim] [bold]{result.summary.duration_seconds}s[/bold]"
-    )
+    if result.summary.scan_mode == "git_history":
+        con.print(
+            f"[dim]Commits inspected:[/dim] [bold]{result.summary.commits_scanned}[/bold]  "
+            f"[dim]Blobs inspected:[/dim] [bold]{result.summary.blobs_scanned}[/bold]  "
+            f"[dim]Blobs cached:[/dim] [bold]{result.summary.blobs_cached}[/bold]  "
+            f"[dim]Duration:[/dim] [bold]{result.summary.duration_seconds}s[/bold]"
+        )
+        if result.summary.refs_scanned:
+            refs_str = ", ".join(result.summary.refs_scanned)
+            con.print(f"[dim]Refs inspected:[/dim] [bold cyan]{refs_str}[/bold cyan]")
+    else:
+        ecosystems_str = ", ".join(result.summary.ecosystems_detected) or "generic"
+        con.print(
+            f"[dim]Files inspected:[/dim] [bold]{result.summary.files_scanned}[/bold]  "
+            f"[dim]Files skipped:[/dim] [bold]{result.summary.files_skipped}[/bold]  "
+            f"[dim]Ecosystems:[/dim] [bold cyan]{ecosystems_str}[/bold cyan]  "
+            f"[dim]Duration:[/dim] [bold]{result.summary.duration_seconds}s[/bold]"
+        )
     con.print()
 
     # Findings
@@ -101,7 +112,10 @@ def _render_finding_card(con: Console, index: int, finding: Finding) -> None:
     # Header with Severity, Category, and Rule ID
     title_text = Text()
     title_text.append(f" {finding.severity.value} ", style=sev_style)
-    title_text.append(f" [{finding.category.value}] ", style="bold white")
+    if finding.is_historical:
+        title_text.append(" [HISTORICAL] ", style="bold magenta")
+    else:
+        title_text.append(f" [{finding.category.value}] ", style="bold white")
     title_text.append(f"{finding.title} ", style="bold white")
     title_text.append(f"({finding.rule_id})", style="dim")
 
@@ -114,6 +128,22 @@ def _render_finding_card(con: Console, index: int, finding: Finding) -> None:
     # 1. Where
     body_text.append("Where: ", style="bold cyan")
     body_text.append(f"{location}\n", style="yellow")
+
+    # Commit metadata for historical findings
+    if finding.commit_sha:
+        body_text.append("Commit: ", style="bold cyan")
+        short_sha = finding.commit_sha[:8]
+        body_text.append(f"{short_sha} ({finding.commit_sha})\n", style="yellow")
+        if finding.commit_author:
+            body_text.append("Author: ", style="bold cyan")
+            body_text.append(f"{finding.commit_author}\n", style="white")
+        if finding.commit_timestamp:
+            body_text.append("Date:   ", style="bold cyan")
+            body_text.append(f"{finding.commit_timestamp}\n", style="white")
+        if finding.commit_subject:
+            body_text.append("Subject:", style="bold cyan")
+            body_text.append(f" {finding.commit_subject}\n", style="dim white")
+        body_text.append("\n")
 
     # Confidence
     body_text.append("Confidence: ", style="bold cyan")
