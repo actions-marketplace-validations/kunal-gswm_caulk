@@ -30,11 +30,20 @@ Caulk emphasizes high-confidence, deterministic detections. This document outlin
 
 ### C. Dependency Manifests & Inventory (`DEPENDENCY`)
 
+Caulk includes 2 built-in deterministic dependency rules in the default rule registry (`DEP001` and `DEP002`), which operate fully offline:
+
 | Rule ID | Title | Severity | Confidence | Target Files | Description |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `DEP001` | Wildcard or Completely Unpinned Dependency Version | `LOW` | `HIGH` | `package.json`, `requirements.txt` | Identifies packages specified as `*` or `latest` or naked package names without version constraints. |
 | `DEP002` | Application Manifest Present Without Corresponding Lockfile | `INFO` | `HIGH` | `package.json` | Flags projects containing dependency manifests without a corresponding committed lockfile (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`). |
-| `DEP003` | Known Vulnerability in Dependency (OSV Advisory) | `CRITICAL` / `HIGH` | `CONFIRMED` | Lockfiles / Pinned manifests | *(Optional)* Queries OSV.dev batch API for verified CVE/GHSA advisories against exact pinned package versions when run with `--check-vulns`. |
+
+#### Optional OSV Advisory Lookups (`DEP003`)
+
+In addition to the 16 default built-in offline rules, Caulk can optionally query the public OSV.dev batch API for verified security advisories against pinned lockfile dependencies when explicitly requested:
+
+| Finding ID | Title | Severity | Confidence | Target Files | Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `DEP003` | Known Vulnerability in Dependency (OSV Advisory) | `CRITICAL` / `HIGH` / `MEDIUM` / `LOW` | `CONFIRMED` | Lockfiles / Pinned manifests | Generated dynamically when outbound advisory queries are enabled via `--check-vulns` (or `enable_advisories = true` in `.caulk.toml`). Because it relies on opt-in network lookups, `DEP003` is not registered in the default built-in offline rule registry (`caulk-security rules list`). |
 
 ### D. Git History Secret Scanning (`HISTORICAL`) — Added in v0.3.0
 

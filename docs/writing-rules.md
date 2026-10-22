@@ -26,6 +26,7 @@ Create your rule in the appropriate module under `src/caulk/rules/`:
 - `secrets.py` for credential exposures (`SECxxx`).
 - `configuration.py` for deployment and container misconfigurations (`CFGxxx`).
 - `dependencies.py` for package manifest issues (`DEPxxx`).
+- `python_sast.py` for Python AST and taint analysis rules (`SASTxxx`).
 
 ### Example Rule Implementation
 
@@ -108,7 +109,7 @@ Every rule must have unit tests covering:
 3. **False Positive Suppression:** Verifies that placeholders (e.g. `acme_live_00000000000000000000000000000000`) do not trigger.
 4. **Sanitization:** Verifies that unredacted secret values never appear in `finding.evidence`.
 
-Add your tests to `tests/test_secrets.py` or `tests/test_configuration.py`. Run tests with:
+Add your tests to `tests/test_secrets.py`, `tests/test_configuration.py`, `tests/test_dependencies.py`, or `tests/test_python_sast.py`. Run tests with:
 
 ```bash
 pytest -v -k "MyNewSecretRule"

@@ -3,6 +3,8 @@
 > **Deterministic, open-source security checker for modern application repositories.**
 
 [![CI](https://github.com/kunal-gswm/caulk/actions/workflows/ci.yml/badge.svg)](https://github.com/kunal-gswm/caulk/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/caulk-security.svg)](https://pypi.org/project/caulk-security/)
+[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Caulk%20Security%20Scanner-blue.svg?logo=github)](https://github.com/marketplace/actions/caulk-security-scanner)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
@@ -30,19 +32,20 @@ Every finding in Caulk answers four essential questions:
 - **NOT an AI application:** Caulk uses **no** LLMs, generative AI, probabilistic machine learning, or AI agents.
 - **NOT a SaaS or subscription:** Requires no account, no login, and collects **zero telemetry**.
 - **NOT an exploitation tool:** Caulk never attempts to exploit a target or alter source code automatically.
-- **NOT a security guarantee:** A clean scan does not prove an application is secure. Caulk inspects known static patterns and configurations, but cannot verify dynamic runtime behavior.
+- **NOT a security guarantee:** A clean scan does not prove an application is secure. Caulk inspects known static patterns and configurations, but cannot verify dynamic runtime behavior, business-logic flaws, or third-party service vulnerabilities.
+- **NOT a dynamic analyzer:** Caulk analyzes static code structures and manifests offline without importing, executing, or instrumenting repository code. It does not perform interprocedural cross-file pointer analysis or evaluate runtime-constructed expressions.
 
 ---
 
 ## 2. Supported Checks & Rules
 
-Caulk ships with 16 built-in deterministic rules across four categories:
+Caulk ships with 16 built-in deterministic rules across four categories (8 Secrets, 4 Configuration, 2 Dependencies, and 2 SAST), plus an optional outbound advisory check:
 
 | Category | Rules | Description |
 | :--- | :--- | :--- |
 | **Secrets** | `SEC001` - `SEC008` | Detects private cryptographic keys (RSA/EC/OpenSSH), AWS access keys, GitHub tokens, Google API keys, Slack webhooks, database connection strings with embedded passwords, credential variable assignments, and accidentally committed `.env` files. |
 | **Configuration** | `CFG001` - `CFG004` | Detects hardcoded `DEBUG = True` in application deployment configs, overly permissive wildcard CORS with credentials, Dockerfiles running as root (`UID 0`), and private keys/secrets copied into Docker images. |
-| **Dependencies** | `DEP001` - `DEP003` | Inventories dependencies across `package.json`, `package-lock.json` (v1/v2/v3), `requirements.txt`, and `pyproject.toml`. Flags wildcard/unpinned dependencies and missing lockfiles. Includes optional OSV advisory vulnerability checks (`--check-vulns`). |
+| **Dependencies** | `DEP001` - `DEP002` | Inventories dependencies across `package.json`, `package-lock.json` (v1/v2/v3), `requirements.txt`, and `pyproject.toml`. Flags wildcard/unpinned dependencies (`DEP001`) and missing lockfiles (`DEP002`). *(Note: When optional OSV advisory checks are enabled with `--check-vulns`, package vulnerabilities are reported under finding ID `DEP003`).* |
 | **SAST** | `SAST001` - `SAST002` | Deterministic Python AST analysis with intraprocedural taint tracking. Detects SQL injection (`SAST001`) and command injection via shell execution (`SAST002`) while actively avoiding false positives on parameterized queries and safe argument lists. |
 
 For complete rule documentation, see [docs/detection-coverage.md](docs/detection-coverage.md).
@@ -51,7 +54,7 @@ For complete rule documentation, see [docs/detection-coverage.md](docs/detection
 
 ## 3. Installation & Distribution
 
-Caulk requires **Python 3.11** or newer.
+Caulk requires **Python 3.11** or newer (tested and supported on Python 3.11, 3.12, and 3.13).
 
 > [!NOTE]
 > **Package Naming:** The official PyPI distribution package name and installed console command is **`caulk-security`** (to prevent collision with the unrelated historical PyPI package and command named `caulk`). The Python import package remains `caulk` (`import caulk`).
@@ -85,6 +88,25 @@ uv pip install -e ".[dev]"
 ---
 
 ## 4. Usage Examples
+
+Caulk provides two complementary scanning modes:
+
+1. **Working-Tree Scanning (`caulk-security scan`):** Inspects the files, static configurations (Dockerfiles, CORS, debug flags), dependency manifests, and Python AST taint propagation in your current active checkout. Fast, local, and recommended for pre-commit checks and regular pull request validation.
+2. **Git History Scanning (`caulk-security history scan`):** Traverses the repository's historical Git commit graph and blob objects across reachable refs (branches, tags, HEAD). Detects credentials committed in the past even if deleted or replaced in subsequent commits. Requires a full clone (`fetch-depth: 0`).
+
+### Try the Reproducible Demo
+
+Clone the repository and scan our isolated, synthetic demonstration fixtures:
+
+```bash
+# Scan intentionally vulnerable patterns (triggers SEC002, CFG001, SAST001, SAST002):
+caulk-security scan examples/demo/vulnerable
+
+# Scan remediated patterns (triggers 0 findings, exit code 0):
+caulk-security scan examples/demo/safe
+```
+
+See [examples/demo/README.md](examples/demo/README.md) for full walkthrough and options.
 
 ### Scan the Current Directory
 
@@ -338,7 +360,25 @@ Caulk uses deterministic, distinct exit codes suitable for CI/CD automation:
 | `0` | **Success / Clean** | Scan completed successfully; no findings breached the configured failure threshold. |
 | `1` | **Vulnerabilities Detected** | Scan completed successfully, but one or more findings equaled or exceeded `fail_threshold` (default `HIGH`). |
 | `2` | **Usage / Config Error** | Invalid command-line arguments, non-existent target path, or malformed `.caulk.toml`. |
-| `3` | **Execution Error** | Unhandled internal exception or unreadable directory. |
+| `3` | **Execution Error / Incomplete Scan** | Unhandled internal exception, unreadable directory, or incomplete scan coverage (e.g. shallow clone during Git history scan, AST recursion or parsing limits exceeded). Fail-closed: prevents false-clean reporting when inspection could not complete. |
+
+### Understanding Exit Code 3 (Fail-Closed Policy)
+
+Security scanners must never silently report a clean status when inspection is incomplete. Caulk enforces a strict fail-closed policy: if a scan encounters an unrecoverable coverage gap without findings that breach the failure threshold, it terminates with **exit code 3** (`EXIT_EXECUTION_ERROR`) rather than exit code 0.
+
+#### Common Causes & How to Respond:
+
+1. **Shallow Clone Detected (`Partial history (shallow clone)`):**
+   - *Cause:* `caulk-security history scan` was executed in a shallow Git repository (e.g. created by `git clone --depth 1` or standard CI checkouts).
+   - *Response:* Fetch complete history before scanning. In GitHub Actions, configure `actions/checkout` with `fetch-depth: 0`. Locally, run `git fetch --unshallow`.
+
+2. **Python AST Parsing or Recursion Limit Exceeded:**
+   - *Cause:* A Python source file has syntax errors under the current runtime or deeply nested structures exceeding recursion limits.
+   - *Response:* Review the reported file paths and diagnostic messages under the `Scan Incomplete` banner. Fix syntax errors or exclude generated/vendor code via `.caulk.toml`.
+
+3. **Skipped Oversized Git Blobs or Corrupt Objects:**
+   - *Cause:* Git history contains corrupt objects or blobs exceeding `--max-blob-size` (default: 2MB).
+   - *Response:* Inspect the diagnostic output. Increase `--max-blob-size` if large text assets must be scanned, or exclude non-code paths via `--exclude`.
 
 ---
 
