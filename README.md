@@ -39,13 +39,13 @@ Every finding in Caulk answers four essential questions:
 
 ## 2. Supported Checks & Rules
 
-Caulk ships with 16 built-in deterministic rules across four categories:
+Caulk ships with 16 built-in deterministic rules across four categories (8 Secrets, 4 Configuration, 2 Dependencies, and 2 SAST), plus an optional outbound advisory check:
 
 | Category | Rules | Description |
 | :--- | :--- | :--- |
 | **Secrets** | `SEC001` - `SEC008` | Detects private cryptographic keys (RSA/EC/OpenSSH), AWS access keys, GitHub tokens, Google API keys, Slack webhooks, database connection strings with embedded passwords, credential variable assignments, and accidentally committed `.env` files. |
 | **Configuration** | `CFG001` - `CFG004` | Detects hardcoded `DEBUG = True` in application deployment configs, overly permissive wildcard CORS with credentials, Dockerfiles running as root (`UID 0`), and private keys/secrets copied into Docker images. |
-| **Dependencies** | `DEP001` - `DEP003` | Inventories dependencies across `package.json`, `package-lock.json` (v1/v2/v3), `requirements.txt`, and `pyproject.toml`. Flags wildcard/unpinned dependencies and missing lockfiles. Includes optional OSV advisory vulnerability checks (`--check-vulns`). |
+| **Dependencies** | `DEP001` - `DEP002` | Inventories dependencies across `package.json`, `package-lock.json` (v1/v2/v3), `requirements.txt`, and `pyproject.toml`. Flags wildcard/unpinned dependencies (`DEP001`) and missing lockfiles (`DEP002`). *(Note: When optional OSV advisory checks are enabled with `--check-vulns`, package vulnerabilities are reported under finding ID `DEP003`).* |
 | **SAST** | `SAST001` - `SAST002` | Deterministic Python AST analysis with intraprocedural taint tracking. Detects SQL injection (`SAST001`) and command injection via shell execution (`SAST002`) while actively avoiding false positives on parameterized queries and safe argument lists. |
 
 For complete rule documentation, see [docs/detection-coverage.md](docs/detection-coverage.md).
