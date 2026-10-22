@@ -3,6 +3,8 @@
 > **Deterministic, open-source security checker for modern application repositories.**
 
 [![CI](https://github.com/kunal-gswm/caulk/actions/workflows/ci.yml/badge.svg)](https://github.com/kunal-gswm/caulk/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/caulk-security.svg)](https://pypi.org/project/caulk-security/)
+[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Caulk%20Security%20Scanner-blue.svg?logo=github)](https://github.com/marketplace/actions/caulk-security-scanner)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
@@ -91,6 +93,20 @@ Caulk provides two complementary scanning modes:
 
 1. **Working-Tree Scanning (`caulk-security scan`):** Inspects the files, static configurations (Dockerfiles, CORS, debug flags), dependency manifests, and Python AST taint propagation in your current active checkout. Fast, local, and recommended for pre-commit checks and regular pull request validation.
 2. **Git History Scanning (`caulk-security history scan`):** Traverses the repository's historical Git commit graph and blob objects across reachable refs (branches, tags, HEAD). Detects credentials committed in the past even if deleted or replaced in subsequent commits. Requires a full clone (`fetch-depth: 0`).
+
+### Try the Reproducible Demo
+
+Clone the repository and scan our isolated, synthetic demonstration fixtures:
+
+```bash
+# Scan intentionally vulnerable patterns (triggers SEC002, CFG001, SAST001, SAST002):
+caulk-security scan examples/demo/vulnerable
+
+# Scan remediated patterns (triggers 0 findings, exit code 0):
+caulk-security scan examples/demo/safe
+```
+
+See [examples/demo/README.md](examples/demo/README.md) for full walkthrough and options.
 
 ### Scan the Current Directory
 
